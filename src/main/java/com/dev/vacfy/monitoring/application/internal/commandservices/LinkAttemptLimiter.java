@@ -1,5 +1,6 @@
 package com.dev.vacfy.monitoring.application.internal.commandservices;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -22,6 +23,7 @@ public class LinkAttemptLimiter {
     private final Clock clock;
     private final Map<String, Deque<Instant>> failures = new ConcurrentHashMap<>();
 
+    @Autowired
     public LinkAttemptLimiter(@Value("${vacty.linking.max-failed-attempts:5}") int maxFailures,
                               @Value("${vacty.linking.window-minutes:10}") long windowMinutes) {
         this(maxFailures, Duration.ofMinutes(windowMinutes), Clock.systemUTC());

@@ -5,6 +5,7 @@ import com.dev.vacfy.monitoring.domain.model.valueobjects.AccessScope;
 import com.dev.vacfy.monitoring.domain.model.valueobjects.Viewer;
 import com.dev.vacfy.monitoring.domain.services.ContainerAccessService;
 import com.dev.vacfy.monitoring.infrastructure.persistence.jpa.repositories.ContainerAssignmentRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -29,6 +30,7 @@ public class ContainerAccessServiceImpl implements ContainerAccessService {
     private final Clock clock;
     private final Map<String, Cached> cache = new ConcurrentHashMap<>();
 
+    @Autowired
     public ContainerAccessServiceImpl(ContainerAssignmentRepository assignmentRepository) {
         this(assignmentRepository, Clock.systemUTC());
     }
