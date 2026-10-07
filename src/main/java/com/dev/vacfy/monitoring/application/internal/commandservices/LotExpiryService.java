@@ -1,6 +1,5 @@
 package com.dev.vacfy.monitoring.application.internal.commandservices;
 
-import com.dev.vacfy.monitoring.application.internal.outboundservices.AlertPublisher;
 import com.dev.vacfy.monitoring.application.internal.queryservices.ContainerLimitsService;
 import com.dev.vacfy.monitoring.domain.model.aggregates.Alert;
 import com.dev.vacfy.monitoring.domain.model.aggregates.VaccineLot;
@@ -36,7 +35,7 @@ public class LotExpiryService {
     private final VaccineLotRepository vaccineLotRepository;
     private final VaccineProfileRepository vaccineProfileRepository;
     private final AlertRepository alertRepository;
-    private final AlertPublisher alertPublisher;
+    private final AlertBroadcaster alertBroadcaster;
     private final ContainerLimitsService containerLimitsService;
     private final ZoneId zoneId;
 
@@ -44,14 +43,14 @@ public class LotExpiryService {
                             VaccineLotRepository vaccineLotRepository,
                             VaccineProfileRepository vaccineProfileRepository,
                             AlertRepository alertRepository,
-                            AlertPublisher alertPublisher,
+                            AlertBroadcaster alertBroadcaster,
                             ContainerLimitsService containerLimitsService,
                             ZoneId vactyZoneId) {
         this.rules = rules;
         this.vaccineLotRepository = vaccineLotRepository;
         this.vaccineProfileRepository = vaccineProfileRepository;
         this.alertRepository = alertRepository;
-        this.alertPublisher = alertPublisher;
+        this.alertBroadcaster = alertBroadcaster;
         this.containerLimitsService = containerLimitsService;
         this.zoneId = vactyZoneId;
     }
@@ -91,15 +90,15 @@ public class LotExpiryService {
                             event.title(), event.message(), event.affectedLots(), lot.getId(), now));
                     LOGGER.warn("ALERTA {} [{}] lote {} termo {}", alert.getType(), alert.getSeverity(),
                             lot.getLotNumber(), lot.getContenedor());
-                    alertPublisher.publish(alert);
+                    alertBroadcaster.opened(alert);
                 }
                 case ESCALATE -> expiring.ifPresent(alert -> {
                     alert.escalate(event.severity(), event.title(), event.message());
-                    alertPublisher.publish(alertRepository.save(alert));
+                    alertBroadcaster.escalated(alertRepository.save(alert));
                 });
                 case RESOLVE -> find(open, event.type()).ifPresent(alert -> {
                     alert.resolve(event.message(), now);
-                    alertPublisher.publish(alertRepository.save(alert));
+                    alertBroadcaster.updated(alertRepository.save(alert));
                 });
             }
         }
@@ -119,7 +118,7 @@ public class LotExpiryService {
         String message = (lot.getStatus() == LotStatus.USED ? "Lote usado" : "Lote descartado") + reason + ".";
         for (Alert alert : alertRepository.findByLotIdAndStatusIn(lot.getId(), AlertStatus.OPEN)) {
             alert.resolve(message, now);
-            alertPublisher.publish(alertRepository.save(alert));
+            alertBroadcaster.updated(alertRepository.save(alert));
         }
     }
 

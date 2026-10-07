@@ -1,7 +1,7 @@
 package com.dev.vacfy.monitoring.application.internal.commandservices;
 
-import com.dev.vacfy.monitoring.application.internal.outboundservices.AlertPublisher;
 import com.dev.vacfy.monitoring.application.internal.queryservices.ContainerLimitsService;
+import com.dev.vacfy.monitoring.application.internal.queryservices.LiveTelemetryStore;
 import com.dev.vacfy.monitoring.domain.model.aggregates.Alert;
 import com.dev.vacfy.monitoring.domain.model.aggregates.ContainerProfile;
 import com.dev.vacfy.monitoring.domain.model.aggregates.Reading;
@@ -54,8 +54,9 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
     private final AlertRepository alertRepository;
     private final VaccineProfileRepository vaccineProfileRepository;
     private final ContainerProfileRepository containerProfileRepository;
-    private final AlertPublisher alertPublisher;
+    private final AlertBroadcaster alertBroadcaster;
     private final ContainerLimitsService containerLimitsService;
+    private final LiveTelemetryStore liveTelemetryStore;
     private final Clock clock = Clock.systemUTC();
     private final Map<String, MonitorEntry> entries = new ConcurrentHashMap<>();
 
@@ -66,16 +67,18 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
                                         AlertRepository alertRepository,
                                         VaccineProfileRepository vaccineProfileRepository,
                                         ContainerProfileRepository containerProfileRepository,
-                                        AlertPublisher alertPublisher,
+                                        AlertBroadcaster alertBroadcaster,
                                         ContainerLimitsService containerLimitsService,
+                                        LiveTelemetryStore liveTelemetryStore,
                                         @Value("${vacty.readings.persist-every-seconds:30}") long persistEverySeconds) {
         this.engine = engine;
         this.readingRepository = readingRepository;
         this.alertRepository = alertRepository;
         this.vaccineProfileRepository = vaccineProfileRepository;
         this.containerProfileRepository = containerProfileRepository;
-        this.alertPublisher = alertPublisher;
+        this.alertBroadcaster = alertBroadcaster;
         this.containerLimitsService = containerLimitsService;
+        this.liveTelemetryStore = liveTelemetryStore;
         this.persistEvery = Duration.ofSeconds(Math.max(0, persistEverySeconds));
     }
 
@@ -109,6 +112,7 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
             List<AlertEvent> events = engine.evaluate(entry.state, command.temperatura(), command.humedad(), now, limits);
 
             boolean valid = isValid(command.temperatura(), command.humedad());
+            liveTelemetryStore.record(contenedor, command.temperatura(), command.humedad(), valid, now);
             if (valid && shouldPersist(entry, now, events)) {
                 readingRepository.save(new Reading(contenedor, command.temperatura(), command.humedad(), now));
                 entry.lastPersistedAt = now;
@@ -137,7 +141,7 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
         return alertRepository.findById(command.alertId()).map(alert -> {
             alert.acknowledge(command.userId(), clock.instant());
             Alert saved = alertRepository.save(alert);
-            alertPublisher.publish(saved);
+            alertBroadcaster.updated(saved);
             return saved;
         });
     }
@@ -229,13 +233,13 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
             Alert alert = alertRepository.save(new Alert(contenedor, event.type(), event.severity(),
                     event.value(), event.title(), event.message(), event.affectedLots(), null, now));
             LOGGER.warn("ALERTA {} [{}] contenedor {}: {}", alert.getType(), alert.getSeverity(), contenedor, alert.getMessage());
-            alertPublisher.publish(alert);
+            alertBroadcaster.opened(alert);
         } else if (event.action() == AlertEvent.Action.RESOLVE) {
             open.ifPresent(alert -> {
                 alert.resolve(event.message(), now);
                 Alert saved = alertRepository.save(alert);
                 LOGGER.info("Alerta {} resuelta en contenedor {}", saved.getType(), contenedor);
-                alertPublisher.publish(saved);
+                alertBroadcaster.updated(saved);
             });
         }
     }
