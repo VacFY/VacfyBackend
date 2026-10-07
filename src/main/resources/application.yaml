@@ -1,0 +1,50 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: VacfyBackend
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/test
+    username: postgres
+    password: carlos
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      timeout: 5000ms
+
+documentation:
+  application:
+    description: "Vacfy-Backend"
+    version: "1.0"
+
+authorization:
+  opaque:
+    secret: "R#7mX@2qLp9!Vz$Kf4^Tw&8Jn?Hy5=Cb"
+    token:
+      bytes: 32
+
+cookie:
+  token:
+    name: access-token
+
+logging:
+  level:
+    org.springframework.security: DEBUG
+    org.springframework.web.socket: DEBUG
+    org.springframework.web.socket.handler: DEBUG
+    com.dev.vacfy.iam.infrastructure.authorization.sfs.pipeline.AuthorizationRequestFilter: DEBUG
