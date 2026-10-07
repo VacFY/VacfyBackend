@@ -1,50 +1,105 @@
+# ============================================================
+# VacTy backend — configuración común
+# Todo lo sensible llega por variables de entorno (ver .env.example).
+# En local, Spring lee el archivo .env de esta carpeta (no se sube a git).
+# ============================================================
 server:
-  port: 8080
+  port: ${PORT:8080}
+  forward-headers-strategy: framework
 
 spring:
   application:
     name: VacfyBackend
 
+  profiles:
+    default: dev
+
+  config:
+    import: optional:file:.env[.properties]
+
   datasource:
-    url: jdbc:postgresql://localhost:5432/test
-    username: postgres
-    password: carlos
+    # Supabase: usar el "Session pooler" (IPv4, puerto 5432) con sslmode=require
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/test}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      minimum-idle: 1
+      connection-timeout: 20000
 
   jpa:
+    open-in-view: false
     hibernate:
-      ddl-auto: update
-    show-sql: true
+      ddl-auto: ${JPA_DDL_AUTO:update}
+    show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
         format_sql: true
-        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          time_zone: UTC
 
   data:
     redis:
-      host: localhost
-      port: 6379
-      database: 0
+      # Local: redis://localhost:6379  ·  Nube (TLS): rediss://default:<clave>@<host>:<puerto>
+      url: ${REDIS_URL:redis://localhost:6379}
       timeout: 5000ms
 
 documentation:
   application:
-    description: "Vacfy-Backend"
+    description: "VacTy-Backend"
     version: "1.0"
 
 authorization:
   opaque:
-    secret: "R#7mX@2qLp9!Vz$Kf4^Tw&8Jn?Hy5=Cb"
+    # Mínimo 32 caracteres. Generar con: openssl rand -base64 48
+    secret: ${AUTH_OPAQUE_SECRET}
+    ttl-hours: ${AUTH_SESSION_TTL_HOURS:12}
     token:
       bytes: 32
 
 cookie:
   token:
     name: access-token
+  secure: ${COOKIE_SECURE:true}
+  # Strict si panel y backend comparten dominio; None si están en dominios distintos (requiere Secure=true)
+  same-site: ${COOKIE_SAMESITE:Strict}
 
-logging:
-  level:
-    org.springframework.security: DEBUG
-    org.springframework.web.socket: DEBUG
-    org.springframework.web.socket.handler: DEBUG
-    com.dev.vacfy.iam.infrastructure.authorization.sfs.pipeline.AuthorizationRequestFilter: DEBUG
+vacty:
+  # Orígenes permitidos para CORS y WebSocket, separados por coma
+  allowed-origins: ${ALLOWED_ORIGINS:http://localhost:8000}
+
+  mqtt:
+    broker-url: ${MQTT_BROKER_URL:tcp://localhost:1883}
+    username: ${MQTT_USERNAME:}
+    password: ${MQTT_PASSWORD:}
+    topic: ${MQTT_TOPIC:iot/telemetry}
+    client-id-prefix: ${MQTT_CLIENT_ID_PREFIX:vacty-backend}
+    retry-seconds: 10
+
+  readings:
+    # Guarda como máximo 1 lectura cada N segundos por contenedor (todas mientras haya alerta activa)
+    persist-every-seconds: ${READINGS_PERSIST_EVERY_SECONDS:30}
+
+  alerts:
+    default-profile-name: "PAI estándar 2–8 °C"
+    default-min-temp: 2.0
+    default-max-temp: 8.0
+    consecutive-readings: 3
+    hysteresis: 0.5
+    rapid-change-delta: 2.0
+    rapid-change-window-seconds: 300
+    offline-after-seconds: 120
+    offline-check-ms: 30000
+    physical-min: -40.0
+    physical-max: 80.0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true

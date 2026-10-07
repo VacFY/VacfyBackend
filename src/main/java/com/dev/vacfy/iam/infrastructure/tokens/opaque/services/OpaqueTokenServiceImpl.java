@@ -22,6 +22,7 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class OpaqueTokenServiceImpl implements OpaqueTokenService {
@@ -34,6 +35,9 @@ public class OpaqueTokenServiceImpl implements OpaqueTokenService {
 
     @Value("${authorization.opaque.token.bytes}")
     private int tokenBytes;
+
+    @Value("${authorization.opaque.ttl-hours:12}")
+    private long ttlHours;
 
     public OpaqueTokenServiceImpl(RedisRepository redisRepository) {
         this.redisRepository = redisRepository;
@@ -79,7 +83,7 @@ public class OpaqueTokenServiceImpl implements OpaqueTokenService {
 
         TokenSession session = new TokenSession(userId.toString());
 
-        redisRepository.save(tokenHash, session);
+        redisRepository.save(tokenHash, session, ttlHours, TimeUnit.HOURS);
 
         return token;
     }

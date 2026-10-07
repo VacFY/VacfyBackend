@@ -1,0 +1,11 @@
+# Perfil de desarrollo (por defecto). Mismos logs detallados que antes.
+spring:
+  jpa:
+    show-sql: ${JPA_SHOW_SQL:true}
+
+logging:
+  level:
+    com.dev.vacfy: DEBUG
+    org.springframework.security: DEBUG
+    org.springframework.web.socket: DEBUG
+    com.dev.vacfy.iam.infrastructure.authorization.sfs.pipeline.AuthorizationRequestFilter: DEBUG

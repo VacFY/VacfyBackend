@@ -9,6 +9,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.Optional;
 
 @Service
@@ -17,14 +18,24 @@ public class CookieServiceImpl implements CookieService {
     @Value("${cookie.token.name}")
     private String cookieName;
 
+    @Value("${cookie.secure:true}")
+    private boolean secure;
+
+    @Value("${cookie.same-site:Strict}")
+    private String sameSite;
+
+    @Value("${authorization.opaque.ttl-hours:12}")
+    private long ttlHours;
+
     @Override
     public void setTokenCookie(HttpServletResponse response, String token) {
 
         ResponseCookie cookie = ResponseCookie.from(cookieName, token)
                 .httpOnly(true)
-                .secure(true)
-                .sameSite("Strict")
+                .secure(secure)
+                .sameSite(sameSite)
                 .path("/")
+                .maxAge(Duration.ofHours(ttlHours))
                 .build();
 
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
@@ -35,8 +46,8 @@ public class CookieServiceImpl implements CookieService {
 
         ResponseCookie cookie = ResponseCookie.from(cookieName, "")
                 .httpOnly(true)
-                .secure(true)
-                .sameSite("Strict")
+                .secure(secure)
+                .sameSite(sameSite)
                 .path("/")
                 .maxAge(0)
                 .build();

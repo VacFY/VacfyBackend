@@ -1,6 +1,7 @@
 package com.dev.vacfy.iam.infrastructure.authorization.sfs.configuration;
 
 import com.dev.vacfy.iam.infrastructure.authorization.sfs.pipeline.AuthorizationRequestFilter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -12,6 +13,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 
+import java.util.Arrays;
 import java.util.List;
 
 @Configuration
@@ -20,9 +22,17 @@ public class WebSecurityConfiguration {
     private final AuthenticationEntryPoint unauthorizedRequestHandlerEntryPoint;
     private final AuthorizationRequestFilter authorizationRequestFilter;
 
-    public WebSecurityConfiguration(AuthenticationEntryPoint unauthorizedRequestHandlerEntryPoint, AuthorizationRequestFilter authorizationRequestFilter) {
+    private final List<String> allowedOrigins;
+
+    public WebSecurityConfiguration(AuthenticationEntryPoint unauthorizedRequestHandlerEntryPoint,
+                                    AuthorizationRequestFilter authorizationRequestFilter,
+                                    @Value("${vacty.allowed-origins}") String allowedOrigins) {
         this.unauthorizedRequestHandlerEntryPoint = unauthorizedRequestHandlerEntryPoint;
         this.authorizationRequestFilter = authorizationRequestFilter;
+        this.allowedOrigins = Arrays.stream(allowedOrigins.split(","))
+                .map(String::trim)
+                .filter(origin -> !origin.isEmpty())
+                .toList();
     }
 
     @Bean
@@ -36,12 +46,14 @@ public class WebSecurityConfiguration {
                 "/swagger-ui/**",
                 "/swagger-resources/**",
                 "/webjars/**",
-                "/ws/device/**"
+                "/ws/device/**",
+                "/ws/alerts/**",
+                "/actuator/health/**"
         };
 
         http.cors(configurer -> configurer.configurationSource(_ -> {
             var cors = new CorsConfiguration();
-            cors.setAllowedOrigins(List.of("http://localhost:8000"));
+            cors.setAllowedOriginPatterns(allowedOrigins);
             cors.setAllowedHeaders(List.of("*"));
             cors.setAllowedMethods(List.of("*"));
             cors.setAllowCredentials(true);

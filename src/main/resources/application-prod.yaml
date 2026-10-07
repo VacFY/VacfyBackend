@@ -1,0 +1,18 @@
+# Perfil de producción: activar con SPRING_PROFILES_ACTIVE=prod
+spring:
+  jpa:
+    show-sql: false
+
+cookie:
+  secure: true
+  same-site: ${COOKIE_SAMESITE:None}
+
+springdoc:
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:true}
+
+logging:
+  level:
+    root: INFO
+    com.dev.vacfy: INFO
+    org.springframework.security: WARN
