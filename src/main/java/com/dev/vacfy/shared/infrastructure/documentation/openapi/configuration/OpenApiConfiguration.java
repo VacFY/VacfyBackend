@@ -7,10 +7,13 @@ import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
 import io.swagger.v3.oas.models.tags.Tag;
+import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 @Configuration
@@ -60,6 +63,18 @@ public class OpenApiConfiguration {
             **Formatos:** fechas y horas en ISO-8601 UTC (`2026-10-07T14:03:00Z`), fechas de vencimiento `AAAA-MM-DD`, \
             temperatura en °C, humedad en %.""";
 
+    /** Secciones de Swagger UI, en este orden. */
+    private static final List<Tag> TAGS = List.of(
+            new Tag().name("Authentication").description("Registro, inicio y cierre de sesión (cookie HttpOnly)"),
+            new Tag().name("Dashboard").description("Pantalla de inicio de web y móvil"),
+            new Tag().name("Alerts").description("Alertas de temperatura y vencimiento generadas por el backend"),
+            new Tag().name("Lots").description("Lotes de vacunas en cada termo: leer el código de la caja, registrar, consultar y cerrar"),
+            new Tag().name("Vaccines").description("Catálogo de vacunas: para qué sirve cada una y en qué rango se conserva"),
+            new Tag().name("Readings").description("Historial de temperatura y humedad"),
+            new Tag().name("Vaccine profiles").description("Perfiles de rango (versión anterior del catálogo) y perfil asignado a cada termo"),
+            new Tag().name("Profile").description("Datos del usuario con sesión"),
+            new Tag().name("Device").description("Dispositivo del usuario"));
+
     @Value("${documentation.application.version}")
     String applicationVersion;
 
@@ -79,16 +94,18 @@ public class OpenApiConfiguration {
                         .name("access-token")
                         .description("Cookie de sesión. La pone sign-in o sign-up; el navegador la envía sola.")))
                 .addSecurityItem(new SecurityRequirement().addList(COOKIE_AUTH))
-                // Orden de las secciones en Swagger UI
-                .tags(List.of(
-                        new Tag().name("Authentication").description("Registro, inicio y cierre de sesión (cookie HttpOnly)"),
-                        new Tag().name("Dashboard").description("Pantalla de inicio de web y móvil"),
-                        new Tag().name("Alerts").description("Alertas de temperatura y vencimiento generadas por el backend"),
-                        new Tag().name("Lots").description("Lotes de vacunas en cada termo: leer el código de la caja, registrar, consultar y cerrar"),
-                        new Tag().name("Vaccines").description("Catálogo de vacunas: para qué sirve cada una y en qué rango se conserva"),
-                        new Tag().name("Readings").description("Historial de temperatura y humedad"),
-                        new Tag().name("Vaccine profiles").description("Perfiles de rango (versión anterior del catálogo) y perfil asignado a cada termo"),
-                        new Tag().name("Profile").description("Datos del usuario con sesión"),
-                        new Tag().name("Device").description("Dispositivo del usuario")));
+                .tags(new ArrayList<>(TAGS));
+    }
+
+    /** springdoc agrega los tags de los controladores en otro orden; aquí se reordenan como en la lista de arriba. */
+    @Bean
+    public OpenApiCustomizer tagOrderCustomizer() {
+        return openApi -> {
+            if (openApi.getTags() == null) return;
+            List<String> order = TAGS.stream().map(Tag::getName).toList();
+            List<Tag> tags = new ArrayList<>(openApi.getTags());
+            tags.sort(Comparator.comparingInt(tag -> order.contains(tag.getName()) ? order.indexOf(tag.getName()) : order.size()));
+            openApi.setTags(tags);
+        };
     }
 }

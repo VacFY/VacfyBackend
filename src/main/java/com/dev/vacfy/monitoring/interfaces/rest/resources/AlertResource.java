@@ -1,6 +1,5 @@
 package com.dev.vacfy.monitoring.interfaces.rest.resources;
 
-import com.dev.vacfy.monitoring.domain.model.valueobjects.AffectedLot;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.util.List;
@@ -31,6 +30,6 @@ public record AlertResource(
         @Schema(description = "Texto de cierre", example = "Temperatura de vuelta en rango: 4,5 °C.") String resolutionMessage,
         @Schema(description = "Título corto, para la notificación del celular", example = "Riesgo de congelación en termo 001")
         String title,
-        @Schema(description = "Lotes en riesgo (vacía si la alerta no es de lotes concretos)") List<AffectedLot> affectedLots,
+        @Schema(description = "Lotes en riesgo (vacía si la alerta no es de lotes concretos)") List<AffectedLotResource> affectedLots,
         @Schema(description = "Lote de una alerta de vencimiento; úsalo con PATCH /api/v1/lots/{lotId}/close", example = "7")
         Long lotId) { }

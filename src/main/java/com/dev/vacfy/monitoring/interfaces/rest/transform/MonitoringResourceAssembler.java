@@ -5,6 +5,7 @@ import com.dev.vacfy.monitoring.domain.model.aggregates.ContainerProfile;
 import com.dev.vacfy.monitoring.domain.model.aggregates.Reading;
 import com.dev.vacfy.monitoring.domain.model.aggregates.VaccineProfile;
 import com.dev.vacfy.monitoring.domain.services.AlertTexts;
+import com.dev.vacfy.monitoring.interfaces.rest.resources.AffectedLotResource;
 import com.dev.vacfy.monitoring.interfaces.rest.resources.AlertResource;
 import com.dev.vacfy.monitoring.interfaces.rest.resources.ContainerProfileResource;
 import com.dev.vacfy.monitoring.interfaces.rest.resources.ReadingResource;
@@ -33,7 +34,9 @@ public final class MonitoringResourceAssembler {
                 iso(alert.getResolvedAt()),
                 alert.getResolutionMessage(),
                 alert.getTitle() != null ? alert.getTitle() : AlertTexts.fallbackTitle(alert.getType(), alert.getContenedor()),
-                alert.getAffectedLots() == null ? List.of() : alert.getAffectedLots(),
+                alert.getAffectedLots() == null ? List.of() : alert.getAffectedLots().stream()
+                        .map(lot -> new AffectedLotResource(lot.lotId(), lot.vaccine(), lot.lotNumber(), lot.expiryDate()))
+                        .toList(),
                 alert.getLotId());
     }
 
