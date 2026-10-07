@@ -21,7 +21,8 @@ import static org.mockito.Mockito.*;
 class SessionHandshakeInterceptorTest {
     private final OpaqueTokenService tokens = mock(OpaqueTokenService.class);
     private final CookieService cookies = mock(CookieService.class);
-    private final SessionHandshakeInterceptor interceptor = new SessionHandshakeInterceptor(tokens, cookies);
+    private final WebSocketTicketService tickets = new WebSocketTicketService();
+    private final SessionHandshakeInterceptor interceptor = new SessionHandshakeInterceptor(tokens, cookies, tickets);
 
     @Test
     void handshakeWithoutSessionIsRejected() {
@@ -55,6 +56,33 @@ class SessionHandshakeInterceptorTest {
                 new ServletServerHttpResponse(new MockHttpServletResponse()), null, attributes));
         assertEquals("SUPERVISOR", attributes.get("userRole"));
         verifyNoInteractions(tokens);
+    }
+
+    @Test
+    void handshakeWithTicketAndNoCookieIsAcceptedOnce() {
+        when(cookies.getTokenFromCookie(any())).thenReturn(Optional.empty());
+        String ticket = tickets.issue(new AuthorizationResponse("ana", "ENFERMERA"));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setParameter("ticket", ticket);
+        Map<String, Object> attributes = new HashMap<>();
+        assertTrue(interceptor.beforeHandshake(new ServletServerHttpRequest(request),
+                new ServletServerHttpResponse(new MockHttpServletResponse()), null, attributes));
+        assertEquals("ana", attributes.get("userId"));
+        assertEquals("ENFERMERA", attributes.get("userRole"));
+
+        Map<String, Object> again = new HashMap<>();
+        assertFalse(interceptor.beforeHandshake(new ServletServerHttpRequest(request),
+                new ServletServerHttpResponse(new MockHttpServletResponse()), null, again));
+        assertTrue(again.isEmpty());
+    }
+
+    @Test
+    void handshakeWithUnknownTicketIsRejected() {
+        when(cookies.getTokenFromCookie(any())).thenReturn(Optional.empty());
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setParameter("ticket", "inventado");
+        assertFalse(interceptor.beforeHandshake(new ServletServerHttpRequest(request),
+                new ServletServerHttpResponse(new MockHttpServletResponse()), null, new HashMap<>()));
     }
 
     @Test

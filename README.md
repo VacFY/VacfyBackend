@@ -94,6 +94,7 @@ Por eso conviene validar los campos en el front antes de enviarlos y elegir el m
 | POST | `/sign-in` | No | `{ "userDni", "userPassword" }` | **200** sin cuerpo; deja la cookie |
 | POST | `/sign-out` | Sí | — | **200**; cierra la sesión y borra la cookie |
 | POST | `/reset-password` | Sí | `{ "currentPassword", "newPassword" }` | **200** sin cuerpo |
+| POST | `/ws-ticket` | Sí | — | **200** `{ "ticket", "expiresInSeconds": 60 }`: ticket de un solo uso para abrir un WebSocket (ver [Tiempo real](#tiempo-real-websockets)) |
 
 ```json
 { "userDni": "12345678", "userPassword": "miClave123" }
@@ -503,7 +504,9 @@ Si la base ya tiene las vacunas de una semilla anterior y nadie las verificó ni
 | `/ws/device` | Cada lectura que llega del ESP32, sin el muestreo de 30 s: `{ "contenedor": "001", "temperatura": 5.4, "humedad": 61.0 }`. `humedad` puede ser `null` |
 | `/ws/alerts` | Una alerta por mensaje, con la misma forma que en REST. Al conectarse llegan primero las alertas abiertas; después, cada alerta que se abre, se marca como vista o se resuelve. También el aviso `{"tipo":"ASIGNACION_CAMBIADA","contenedor":"001"}` |
 
-- **Piden sesión.** El handshake lleva la misma cookie `access-token` que la API REST. En el navegador se envía sola (con el mismo origen o `COOKIE_SAMESITE=None`). En la app móvil, guarda la cookie que llega en `Set-Cookie` al iniciar sesión y envíala en el header `Cookie` del handshake. Sin sesión válida, el handshake se rechaza (401).
+- **Piden sesión**, de una de dos formas. Sin ninguna, el handshake se rechaza (401).
+  - **Cookie:** el handshake lleva la misma cookie `access-token` que la API REST. En el navegador se envía sola cuando el WebSocket va al mismo dominio que la cookie (p. ej. con el proxy de Vite en desarrollo). En la app móvil, guarda la cookie que llega en `Set-Cookie` al iniciar sesión y envíala en el header `Cookie` del handshake.
+  - **Ticket:** `POST /api/v1/authentication/ws-ticket` (con la sesión) devuelve un ticket que sirve **una sola vez** y vence en 60 s; se abre `wss://<backend>/ws/alerts?ticket=<ticket>`. Es lo que usa el panel web desplegado: su API pasa por el proxy de Netlify o Vercel, así que la cookie queda en el dominio del panel y no viaja en el WebSocket, que va directo al backend. Pide un ticket nuevo antes de cada conexión o reconexión. Los tickets viven en memoria: con una sola instancia del backend es suficiente.
 - **Cada usuario recibe solo lo de sus termos:** la enfermera, los que tiene vinculados; el supervisor, todos. Si alguien toma tu termo, sus lecturas dejan de llegarte al momento.
 - Usa `ws://localhost:8080/ws/...` en local y `wss://<backend>/ws/...` en producción. El origen del front debe estar en `ALLOWED_ORIGINS`.
 - Solo el servidor envía mensajes; lo que mande el cliente se ignora.
@@ -511,7 +514,9 @@ Si la base ya tiene las vacunas de una semilla anterior y nadie las verificó ni
 - Si la conexión se cae, reconéctate. Al reconectar, `/ws/alerts` vuelve a enviar las alertas abiertas.
 
 ```js
-const ws = new WebSocket(`${WS}/ws/alerts`);   // el navegador envía la cookie solo
+// Panel web: primero un ticket (por el proxy, con la cookie) y luego el WebSocket directo al backend
+const { ticket } = await (await fetch('/api/v1/authentication/ws-ticket', { method: 'POST', credentials: 'include' })).json();
+const ws = new WebSocket(`${WS}/ws/alerts?ticket=${encodeURIComponent(ticket)}`);
 ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
   if (msg.tipo === 'ASIGNACION_CAMBIADA') return refreshMyContainers();   // GET /api/v1/my/containers
@@ -671,29 +676,32 @@ Hoy la única implementación es `NoOpNotificationSender`, que solo deja una lí
 
 ## Correr en local
 
-Requisitos: JDK 25 y Docker.
+Requisitos: JDK 25. No hace falta Docker: el `.env` apunta a Supabase y al broker MQTT en la nube.
 
 ```bash
-cp .env.example .env        # completa la contraseña de Supabase y AUTH_OPAQUE_SECRET
-docker compose up -d        # Mosquitto
+cp .env.example .env        # completa Supabase, AUTH_OPAQUE_SECRET y el broker MQTT (MQTT_BROKER_URL=ssl://<host>:8883, usuario y clave)
 ./mvnw spring-boot:run
 ```
 
 - Swagger: http://localhost:8080/swagger-ui.html
 - Salud: http://localhost:8080/actuator/health
+- Con JDK 24 también compila: `./mvnw -Djava.version=24 spring-boot:run`.
+- Si Render también está conectado al mismo broker y a la misma base, las dos instancias procesan la telemetría (lecturas y alertas duplicadas). Para probar la API sin consumir MQTT: `MQTT_BROKER_URL=tcp://127.0.0.1:1 ./mvnw spring-boot:run`.
 
 ### Prueba del motor sin el ESP32
 
+Publica en el broker en la nube con [MQTTX](https://mqttx.app) o con `mosquitto_pub` (TLS, con el usuario y la clave del `.env`):
+
 ```bash
-T=iot/telemetry
+P="mosquitto_pub -h <host del broker> -p 8883 --cafile /etc/ssl/cert.pem -u <usuario> -P <clave> -t iot/telemetry"
 # Normal: no pasa nada
-for i in 1 2 3; do mosquitto_pub -t $T -m '{"contenedor":"001","temperatura":5.0,"humedad":50}'; sleep 2; done
+for i in 1 2 3; do $P -m '{"contenedor":"001","temperatura":5.0,"humedad":50}'; sleep 2; done
 # Fuera de rango: a la 3.ª lectura se abre OUT_OF_RANGE (y RAPID_CHANGE por el salto)
-for i in 1 2 3; do mosquitto_pub -t $T -m '{"contenedor":"001","temperatura":10.0,"humedad":50}'; sleep 2; done
+for i in 1 2 3; do $P -m '{"contenedor":"001","temperatura":10.0,"humedad":50}'; sleep 2; done
 # Vuelve al rango: se cierra
-mosquitto_pub -t $T -m '{"contenedor":"001","temperatura":7.0,"humedad":50}'
+$P -m '{"contenedor":"001","temperatura":7.0,"humedad":50}'
 # JSON con nan (firmware antiguo): no rompe nada; tres seguidas abren INVALID_READING
-mosquitto_pub -t $T -m '{"contenedor":"001","temperatura":nan,"humedad":nan}'
+$P -m '{"contenedor":"001","temperatura":nan,"humedad":nan}'
 # Deja de publicar 2–3 min: se abre SENSOR_OFFLINE
 ```
 
@@ -751,5 +759,6 @@ RUN_CONTEXT_TEST=true ./mvnw test         # además, el test de contexto (necesi
 | `ContainerLinkTest` | Registrar (solo supervisor), vincular con clave correcta o incorrecta, límite de intentos, cambio de turno, no duplicar, desvincular ajeno (403), supervisor desvincula, código temporal de un solo uso que vence, clave regenerada |
 | `ContainerAccessServiceImplTest` | Supervisor ve todo, enfermera solo lo suyo, caché que se invalida al vincular |
 | `AccessFilteringTest` | Lecturas (403 y desde la asignación), dashboard y alertas filtrados por usuario |
-| `WebSocketFilteringTest` / `SessionHandshakeInterceptorTest` | `/ws/device` y `/ws/alerts` solo envían a quien puede ver el termo; handshake sin sesión rechazado |
+| `WebSocketFilteringTest` / `SessionHandshakeInterceptorTest` | `/ws/device` y `/ws/alerts` solo envían a quien puede ver el termo; handshake sin sesión rechazado; ticket aceptado una sola vez |
+| `WebSocketTicketServiceTest` | Tickets de un solo uso, que vencen a los 60 s y no se repiten |
 | `PairingServiceImplTest` / `PairingTopicTest` / `ContainerKeysTest` | Códigos temporales, tópicos MQTT y formato de las claves |

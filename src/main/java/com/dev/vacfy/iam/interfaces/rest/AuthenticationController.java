@@ -1,11 +1,14 @@
 package com.dev.vacfy.iam.interfaces.rest;
 
 import com.dev.vacfy.iam.domain.services.CredentialCommandService;
+import com.dev.vacfy.iam.infrastructure.authorization.sfs.websocket.WebSocketTicketService;
 import com.dev.vacfy.iam.infrastructure.cookies.CookieService;
 import com.dev.vacfy.iam.infrastructure.tokens.opaque.OpaqueTokenService;
+import com.dev.vacfy.iam.infrastructure.tokens.opaque.models.AuthorizationResponse;
 import com.dev.vacfy.iam.interfaces.rest.resources.UpdatePasswordResource;
 import com.dev.vacfy.iam.interfaces.rest.resources.SignInResource;
 import com.dev.vacfy.iam.interfaces.rest.resources.SignUpResource;
+import com.dev.vacfy.iam.interfaces.rest.resources.WebSocketTicketResource;
 import com.dev.vacfy.iam.interfaces.rest.transform.SignInCommandFromResourceAssembler;
 import com.dev.vacfy.iam.interfaces.rest.transform.SignUpCommandFromResourceAssembler;
 import com.dev.vacfy.iam.interfaces.rest.transform.UpdatePasswordCommandFromResourceAssembler;
@@ -33,11 +36,14 @@ public class AuthenticationController {
     private final CredentialCommandService credentialCommandService;
     private final OpaqueTokenService opaqueTokenService;
     private final CookieService cookieService;
+    private final WebSocketTicketService webSocketTicketService;
 
-    public AuthenticationController(CredentialCommandService credentialCommandService, OpaqueTokenService opaqueTokenService, CookieService cookieService) {
+    public AuthenticationController(CredentialCommandService credentialCommandService, OpaqueTokenService opaqueTokenService,
+                                    CookieService cookieService, WebSocketTicketService webSocketTicketService) {
         this.credentialCommandService = credentialCommandService;
         this.opaqueTokenService = opaqueTokenService;
         this.cookieService = cookieService;
+        this.webSocketTicketService = webSocketTicketService;
     }
 
     @PostMapping("/sign-up")
@@ -103,6 +109,24 @@ public class AuthenticationController {
         var updatePasswordCommand = UpdatePasswordCommandFromResourceAssembler.toCommandFromResource(userId, updatePasswordResource);
         credentialCommandService.handle(updatePasswordCommand);
         return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/ws-ticket")
+    @Operation(summary = "Ticket para abrir un WebSocket",
+            description = """
+                    Devuelve un ticket de **un solo uso** que vence en 60 s. Con él se abre `/ws/device` o `/ws/alerts` \
+                    sin cookie: `wss://<backend>/ws/alerts?ticket=<ticket>`. Pide uno nuevo antes de cada conexión.
+
+                    Sirve al panel web desplegado en otro dominio: su cookie queda en el dominio del panel (la API pasa \
+                    por el proxy del hosting) y no viaja en el WebSocket, que va directo al backend.""")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Ticket emitido"),
+            @ApiResponse(responseCode = "401", description = "No hay sesión")
+    })
+    public ResponseEntity<WebSocketTicketResource> webSocketTicket(HttpServletRequest request) {
+        var user = new AuthorizationResponse(request.getAttribute("userId").toString(), request.getAttribute("userRole").toString());
+        String ticket = webSocketTicketService.issue(user);
+        return ResponseEntity.ok(new WebSocketTicketResource(ticket, WebSocketTicketService.TTL.toSeconds()));
     }
 
     @PostMapping("/sign-out")

@@ -18,18 +18,22 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Autentica el handshake de los WebSockets con la misma cookie de sesión que la API REST y guarda
- * "userId" y "userRole" en los atributos de la sesión WebSocket. Sin sesión válida, rechaza con 401.
+ * Autentica el handshake de los WebSockets con la misma cookie de sesión que la API REST o, si no llega la
+ * cookie (panel web en otro dominio), con un ticket de un solo uso en {@code ?ticket=}. Guarda "userId" y
+ * "userRole" en los atributos de la sesión WebSocket. Sin sesión válida, rechaza con 401.
  */
 @Component
 public class SessionHandshakeInterceptor implements HandshakeInterceptor {
     private static final Logger LOGGER = LoggerFactory.getLogger(SessionHandshakeInterceptor.class);
     private final OpaqueTokenService opaqueTokenService;
     private final CookieService cookieService;
+    private final WebSocketTicketService ticketService;
 
-    public SessionHandshakeInterceptor(OpaqueTokenService opaqueTokenService, CookieService cookieService) {
+    public SessionHandshakeInterceptor(OpaqueTokenService opaqueTokenService, CookieService cookieService,
+                                       WebSocketTicketService ticketService) {
         this.opaqueTokenService = opaqueTokenService;
         this.cookieService = cookieService;
+        this.ticketService = ticketService;
     }
 
     @Override
@@ -58,6 +62,9 @@ public class SessionHandshakeInterceptor implements HandshakeInterceptor {
         Object userId = http.getAttribute("userId");
         Object role = http.getAttribute("userRole");
         if (userId != null && role != null) return Optional.of(new AuthorizationResponse(userId.toString(), role.toString()));
-        return cookieService.getTokenFromCookie(http).flatMap(opaqueTokenService::getUserDataFromToken);
+        Optional<AuthorizationResponse> fromCookie =
+                cookieService.getTokenFromCookie(http).flatMap(opaqueTokenService::getUserDataFromToken);
+        if (fromCookie.isPresent()) return fromCookie;
+        return ticketService.redeem(http.getParameter("ticket"));
     }
 }

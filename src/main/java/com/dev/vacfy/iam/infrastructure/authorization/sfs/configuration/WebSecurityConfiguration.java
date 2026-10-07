@@ -46,7 +46,10 @@ public class WebSecurityConfiguration {
                 "/swagger-ui/**",
                 "/swagger-resources/**",
                 "/webjars/**",
-                // /ws/device y /ws/alerts piden sesión: el handshake lleva la misma cookie
+                // /ws/device y /ws/alerts piden sesión, pero la valida SessionHandshakeInterceptor
+                // (cookie o ticket de un solo uso), no este filtro
+                "/ws/device",
+                "/ws/alerts",
                 "/actuator/health/**"
         };
 

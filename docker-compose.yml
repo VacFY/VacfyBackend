@@ -1,5 +1,5 @@
-# Desarrollo local: Mosquitto. La base de datos es Supabase (ver .env).
-# Uso:  docker compose up -d   y luego   ./mvnw spring-boot:run
+# Opcional: en desarrollo ya no hace falta. El .env apunta a Supabase y al broker MQTT en la nube.
+# Sirve para una VM de despliegue con backend + Mosquitto propio (ver "Desplegar" en el README).
 services:
   mosquitto:
     image: eclipse-mosquitto:2
