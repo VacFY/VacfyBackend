@@ -63,6 +63,9 @@ vacty:
   # Orígenes permitidos para CORS y WebSocket, separados por coma
   allowed-origins: ${ALLOWED_ORIGINS:http://localhost:8000}
 
+  # Zona horaria de la posta: define qué día es "hoy" para los vencimientos
+  timezone: ${VACTY_TIMEZONE:America/Lima}
+
   mqtt:
     broker-url: ${MQTT_BROKER_URL:tcp://localhost:1883}
     username: ${MQTT_USERNAME:}
@@ -87,6 +90,11 @@ vacty:
     offline-check-ms: 30000
     physical-min: -40.0
     physical-max: 80.0
+    # Vencimiento de lotes: LOT_EXPIRING a N días (WARNING) y CRITICAL desde los últimos días
+    expiring-days: 30
+    expiring-critical-days: 7
+    # Revisión diaria de vencimientos (hora de vacty.timezone)
+    expiry-check-cron: "0 0 6 * * *"
 
 management:
   endpoints:

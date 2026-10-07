@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 import java.time.Duration;
+import java.time.ZoneId;
 
 @Configuration
 @EnableScheduling
@@ -30,5 +31,11 @@ public class MonitoringConfiguration {
                 Duration.ofSeconds(offlineAfterSeconds),
                 physicalMin,
                 physicalMax));
+    }
+
+    /** Zona horaria de la posta: define qué día es "hoy" para los vencimientos. */
+    @Bean
+    public ZoneId vactyZoneId(@Value("${vacty.timezone:America/Lima}") String timezone) {
+        return ZoneId.of(timezone);
     }
 }
