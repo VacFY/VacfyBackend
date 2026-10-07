@@ -23,7 +23,7 @@ public class WebSocketAlertPublisher implements AlertPublisher {
     @Override
     public void publish(Alert alert) {
         try {
-            alertWebSocketHandler.sendToAll(objectMapper.writeValueAsString(MonitoringResourceAssembler.toResource(alert)));
+            alertWebSocketHandler.sendAlert(alert.getContenedor(), objectMapper.writeValueAsString(MonitoringResourceAssembler.toResource(alert)));
         } catch (Exception e) {
             LOGGER.warn("No se pudo publicar la alerta {}", alert.getId(), e);
         }

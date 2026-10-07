@@ -21,7 +21,7 @@ public class WebSocketPublisherImpl implements WebSocketPublisher {
     public void iotWebSocketPublish(Telemetry telemetry) {
         try {
             String json = objectMapper.writeValueAsString(telemetry);
-            iotWebSocketHandler.sendToAll(json);
+            iotWebSocketHandler.sendToContainer(telemetry.contenedor(), json);
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Error serializing telemetry: ", e);
         }
