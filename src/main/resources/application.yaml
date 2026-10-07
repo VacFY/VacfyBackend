@@ -39,12 +39,6 @@ spring:
         jdbc:
           time_zone: UTC
 
-  data:
-    redis:
-      # Local: redis://localhost:6379  ·  Nube (TLS): rediss://default:<clave>@<host>:<puerto>
-      url: ${REDIS_URL:redis://localhost:6379}
-      timeout: 5000ms
-
 documentation:
   application:
     description: "VacTy-Backend"

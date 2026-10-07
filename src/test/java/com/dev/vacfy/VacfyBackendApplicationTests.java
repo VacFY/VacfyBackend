@@ -5,7 +5,7 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * Levanta todo el contexto: necesita Postgres, Redis y Mosquitto.
+ * Levanta todo el contexto: necesita Postgres y Mosquitto.
  * Se ejecuta solo con RUN_CONTEXT_TEST=true (p. ej. con docker compose levantado).
  */
 @SpringBootTest

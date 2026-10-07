@@ -1,12 +1,6 @@
-# Desarrollo local: Redis + Mosquitto. La base de datos es Supabase (ver .env).
+# Desarrollo local: Mosquitto. La base de datos es Supabase (ver .env).
 # Uso:  docker compose up -d   y luego   ./mvnw spring-boot:run
 services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    restart: unless-stopped
-
   mosquitto:
     image: eclipse-mosquitto:2
     ports:
@@ -21,9 +15,8 @@ services:
   #   env_file: .env
   #   environment:
   #     SPRING_PROFILES_ACTIVE: prod
-  #     REDIS_URL: redis://redis:6379
   #     MQTT_BROKER_URL: tcp://mosquitto:1883
   #     COOKIE_SAMESITE: Strict
   #   ports:
   #     - "8080:8080"
-  #   depends_on: [redis, mosquitto]
+  #   depends_on: [mosquitto]

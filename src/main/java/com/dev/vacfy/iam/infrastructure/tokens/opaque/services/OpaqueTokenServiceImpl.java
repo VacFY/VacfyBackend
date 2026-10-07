@@ -2,7 +2,7 @@ package com.dev.vacfy.iam.infrastructure.tokens.opaque.services;
 
 import com.dev.vacfy.iam.domain.exceptions.SecretBytesException;
 import com.dev.vacfy.iam.domain.exceptions.TokenBytesException;
-import com.dev.vacfy.iam.infrastructure.persistence.redis.repositories.RedisRepository;
+import com.dev.vacfy.iam.infrastructure.persistence.jpa.repositories.TokenSessionRepository;
 import com.dev.vacfy.iam.infrastructure.tokens.opaque.OpaqueTokenService;
 import com.dev.vacfy.iam.infrastructure.tokens.opaque.models.AuthorizationResponse;
 import com.dev.vacfy.iam.infrastructure.tokens.opaque.models.TokenSession;
@@ -10,6 +10,7 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Mac;
@@ -18,6 +19,8 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Optional;
@@ -28,7 +31,7 @@ import java.util.concurrent.TimeUnit;
 public class OpaqueTokenServiceImpl implements OpaqueTokenService {
     private static final Logger LOGGER = LoggerFactory.getLogger(OpaqueTokenServiceImpl.class);
     private static final SecureRandom secureRandom = new SecureRandom();
-    private final RedisRepository redisRepository;
+    private final TokenSessionRepository tokenSessionRepository;
 
     @Value("${authorization.opaque.secret}")
     private String secret;
@@ -39,8 +42,8 @@ public class OpaqueTokenServiceImpl implements OpaqueTokenService {
     @Value("${authorization.opaque.ttl-hours:12}")
     private long ttlHours;
 
-    public OpaqueTokenServiceImpl(RedisRepository redisRepository) {
-        this.redisRepository = redisRepository;
+    public OpaqueTokenServiceImpl(TokenSessionRepository tokenSessionRepository) {
+        this.tokenSessionRepository = tokenSessionRepository;
     }
 
     @PostConstruct
@@ -79,11 +82,9 @@ public class OpaqueTokenServiceImpl implements OpaqueTokenService {
 
         String token = generateSecureToken();
 
-        String tokenHash = hashToken(token);
+        Instant expiresAt = Instant.now().plus(ttlHours, ChronoUnit.HOURS);
 
-        TokenSession session = new TokenSession(userId.toString());
-
-        redisRepository.save(tokenHash, session, ttlHours, TimeUnit.HOURS);
+        tokenSessionRepository.save(new TokenSession(hashToken(token), userId, expiresAt));
 
         return token;
     }
@@ -106,17 +107,25 @@ public class OpaqueTokenServiceImpl implements OpaqueTokenService {
 
     @Override
     public Optional<AuthorizationResponse> getUserDataFromToken(String token) {
-        String hashedKey = hashToken(token);
-        return redisRepository.findByKey(hashedKey, AuthorizationResponse.class);
+        return tokenSessionRepository.findById(hashToken(token))
+                .filter(session -> !session.isExpired())
+                .map(session -> new AuthorizationResponse(session.getUserId().toString()));
     }
 
     //-------------------------------------------------------------------------------------------------------------------
 
     @Override
     public void revokeToken(String token) {
-        if (!redisRepository.delete(hashToken(token))) {
-            throw new IllegalStateException("Cannot delete opaque token");
-        }
+        tokenSessionRepository.deleteById(hashToken(token));
+    }
+
+    //-------------------------------------------------------------------------------------------------------------------
+
+    /** Cada hora borra las sesiones vencidas para que la tabla no crezca. */
+    @Scheduled(fixedRate = 1, timeUnit = TimeUnit.HOURS)
+    public void deleteExpiredSessions() {
+        long deleted = tokenSessionRepository.deleteByExpiresAtBefore(Instant.now());
+        if (deleted > 0) LOGGER.info("Sesiones vencidas eliminadas: {}", deleted);
     }
 
 }

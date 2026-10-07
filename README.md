@@ -4,7 +4,7 @@ Spring Boot 4 (OpenJDK 25), monolito modular hexagonal.
 
 | Módulo | Qué hace |
 |---|---|
-| `iam` | Registro e inicio de sesión. Token opaco en cookie, sesiones en Redis con expiración |
+| `iam` | Registro e inicio de sesión. Token opaco en cookie, sesiones en la tabla `sessions` (Postgres) con expiración |
 | `user` | Perfiles y dispositivos |
 | `iot` | Recibe la telemetría por MQTT y la reenvía en vivo por `/ws/device` |
 | `monitoring` | **Motor de alertas**: guarda lecturas, evalúa reglas y avisa por `/ws/alerts` |
@@ -45,7 +45,7 @@ Requisitos: JDK 25 y Docker.
 
 ```bash
 cp .env.example .env        # completa la contraseña de Supabase y AUTH_OPAQUE_SECRET
-docker compose up -d        # Redis + Mosquitto
+docker compose up -d        # Mosquitto
 ./mvnw spring-boot:run
 ```
 
@@ -77,8 +77,8 @@ Para ver las alertas: `GET /api/v1/alerts?status=ALL`, o conecta un cliente WebS
 | `SPRING_DATASOURCE_URL` | `jdbc:postgresql://aws-0-us-east-2.pooler.supabase.com:5432/postgres?sslmode=require` (**Session pooler**, IPv4) |
 | `SPRING_DATASOURCE_USERNAME` | `postgres.<project-ref>` |
 | `SPRING_DATASOURCE_PASSWORD` | Contraseña de la base de datos de Supabase |
-| `REDIS_URL` | `redis://localhost:6379`. En la nube con TLS: `rediss://default:<clave>@<host>:<puerto>` |
 | `AUTH_OPAQUE_SECRET` | Obligatorio, ≥ 32 caracteres: `openssl rand -base64 48` |
+| `AUTH_SESSION_TTL_HOURS` | Duración de la sesión en horas; por defecto 12 |
 | `ALLOWED_ORIGINS` | URL del panel/app, separadas por coma, p. ej. `https://vacty-panel.vercel.app` |
 | `COOKIE_SAMESITE` | `Strict` si panel y backend comparten dominio; `None` si no (prod usa `None` por defecto) |
 | `MQTT_BROKER_URL` | `tcp://host:1883`, o `ssl://host:8883` con TLS |
@@ -89,23 +89,22 @@ Para ver las alertas: `GET /api/v1/alerts?status=ALL`, o conecta un cliente WebS
 **Notas sobre Supabase:**
 - Usa el *Session pooler* (botón **Connect** del dashboard). La conexión directa `db.<ref>.supabase.co` solo funciona por IPv6, y la mayoría de servicios de despliegue no lo soportan.
 - Los proyectos gratuitos se pausan por inactividad. Ábrelo antes de una demo.
-- Las tablas se crean con `ddl-auto=update`. Las nuevas son `readings`, `alerts`, `vaccine_profiles` y `container_profiles`.
+- Las tablas se crean con `ddl-auto=update`. Las nuevas son `readings`, `alerts`, `vaccine_profiles`, `container_profiles` y `sessions` (sesiones de login; las vencidas se borran cada hora).
 
 ## Desplegar
 
 La imagen se construye con el `Dockerfile` (Temurin 25, perfil `prod`). Se necesita:
 
 1. **Backend**: cualquier servicio que construya un Dockerfile (Render, Railway, Fly.io o una VM con Docker), con las variables de arriba.
-2. **Redis**: uno administrado (Upstash, Render Key Value, Railway) o en la misma VM.
-3. **Broker MQTT público**: el ESP32 tiene que llegar a él desde cualquier red. Hay dos opciones:
+2. **Broker MQTT público**: el ESP32 tiene que llegar a él desde cualquier red. Hay dos opciones:
    - *VM propia*: Mosquitto con `password_file` y `allow_anonymous false`, puertos 1883 u 8883.
    - *Administrado* (HiveMQ Cloud, EMQX Cloud): TLS en 8883 con usuario y clave; en el ESP32, `MQTT_USE_TLS 1`.
 
-La opción más simple es **una sola VM con Docker** que corra el backend, Redis y Mosquitto (descomenta el servicio `backend` en `docker-compose.yml`), conectada a Supabase.
+La opción más simple es **una sola VM con Docker** que corra el backend y Mosquitto (descomenta el servicio `backend` en `docker-compose.yml`), conectada a Supabase.
 
 ## Tests
 
 ```bash
 ./mvnw test                               # tests del motor de reglas (no necesitan base de datos)
-RUN_CONTEXT_TEST=true ./mvnw test         # además, el test de contexto (necesita BD, Redis y Mosquitto)
+RUN_CONTEXT_TEST=true ./mvnw test         # además, el test de contexto (necesita BD y Mosquitto)
 ```
