@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 
 @Service
@@ -38,7 +39,9 @@ public class MonitoringQueryServiceImpl implements MonitoringQueryService {
         Set<AlertStatus> statuses = parseStatuses(query.status());
         String contenedor = query.contenedor();
         if (contenedor == null || contenedor.isBlank()) {
-            return alertRepository.findTop200ByStatusInOrderByStartedAtDesc(statuses);
+            if (query.containers() == null) return alertRepository.findTop200ByStatusInOrderByStartedAtDesc(statuses);
+            if (query.containers().isEmpty()) return List.of();
+            return alertRepository.findTop200ByContenedorInAndStatusInOrderByStartedAtDesc(query.containers(), statuses);
         }
         return alertRepository.findTop200ByContenedorAndStatusInOrderByStartedAtDesc(contenedor.trim(), statuses);
     }
@@ -47,8 +50,15 @@ public class MonitoringQueryServiceImpl implements MonitoringQueryService {
     public List<Reading> handle(GetReadingsQuery query) {
         Instant to = query.to() != null ? query.to() : Instant.now();
         Instant from = query.from() != null ? query.from() : to.minus(Duration.ofHours(24));
+        if (query.notBefore() != null && from.isBefore(query.notBefore())) from = query.notBefore();
+        if (!from.isBefore(to)) return List.of();
         return readingRepository.findTop1000ByContenedorAndReceivedAtBetweenOrderByReceivedAtDesc(
                 query.contenedor().trim(), from, to);
+    }
+
+    @Override
+    public Optional<Alert> getAlert(Long alertId) {
+        return alertRepository.findById(alertId);
     }
 
     @Override

@@ -2,6 +2,7 @@ package com.dev.vacfy.monitoring.interfaces.rest;
 
 import com.dev.vacfy.monitoring.domain.model.commands.AssignContainerProfileCommand;
 import com.dev.vacfy.monitoring.domain.model.commands.CreateVaccineProfileCommand;
+import com.dev.vacfy.monitoring.domain.services.ContainerAccessService;
 import com.dev.vacfy.monitoring.domain.services.MonitoringCommandService;
 import com.dev.vacfy.monitoring.domain.services.MonitoringQueryService;
 import com.dev.vacfy.monitoring.interfaces.rest.resources.AssignContainerProfileResource;
@@ -16,6 +17,7 @@ import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -31,9 +33,13 @@ public class VaccineProfilesController {
     private final MonitoringQueryService monitoringQueryService;
     private final MonitoringCommandService monitoringCommandService;
 
-    public VaccineProfilesController(MonitoringQueryService monitoringQueryService, MonitoringCommandService monitoringCommandService) {
+    private final ContainerAccessService containerAccessService;
+
+    public VaccineProfilesController(MonitoringQueryService monitoringQueryService, MonitoringCommandService monitoringCommandService,
+                                     ContainerAccessService containerAccessService) {
         this.monitoringQueryService = monitoringQueryService;
         this.monitoringCommandService = monitoringCommandService;
+        this.containerAccessService = containerAccessService;
     }
 
     @GetMapping("/vaccine-profiles")
@@ -73,10 +79,13 @@ public class VaccineProfilesController {
     @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(examples = @ExampleObject(value = "{\"profileId\": 1}")))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Perfil asignado"),
-            @ApiResponse(responseCode = "400", description = "El perfil no existe", content = @Content)
+            @ApiResponse(responseCode = "400", description = "El perfil no existe", content = @Content),
+            @ApiResponse(responseCode = "403", description = "El termo no está asignado a esta enfermera", content = @Content)
     })
     public ResponseEntity<ContainerProfileResource> assignProfile(@Parameter(description = "Código del termo (el que envía el ESP32)", example = "001") @PathVariable String contenedor,
-                                                                  @RequestBody AssignContainerProfileResource resource) {
+                                                                  @RequestBody AssignContainerProfileResource resource,
+                                                                  HttpServletRequest request) {
+        RequestViewer.requireAccess(containerAccessService.scope(RequestViewer.from(request)), contenedor);
         try {
             var saved = monitoringCommandService.handle(new AssignContainerProfileCommand(contenedor, resource.profileId()));
             return ResponseEntity.ok(MonitoringResourceAssembler.toResource(saved));

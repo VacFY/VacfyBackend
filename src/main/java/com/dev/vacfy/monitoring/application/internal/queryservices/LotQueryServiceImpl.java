@@ -93,6 +93,11 @@ public class LotQueryServiceImpl implements LotQueryService {
         return toViews(vaccineLotRepository.findByStatusAndExpiryDateLessThanEqualOrderByExpiryDateAsc(LotStatus.ACTIVE, limit));
     }
 
+    @Override
+    public Optional<VaccineLot> getLot(Long lotId) {
+        return vaccineLotRepository.findById(lotId);
+    }
+
     private List<LotView> toViews(List<VaccineLot> lots) {
         LocalDate today = LocalDate.now(zoneId);
         Set<Long> vaccineIds = lots.stream().map(VaccineLot::getVaccineId).collect(Collectors.toSet());

@@ -2,6 +2,8 @@ package com.dev.vacfy.monitoring.interfaces.rest;
 
 import com.dev.vacfy.monitoring.domain.model.commands.CloseLotCommand;
 import com.dev.vacfy.monitoring.domain.model.commands.RegisterLotCommand;
+import com.dev.vacfy.monitoring.domain.model.valueobjects.AccessScope;
+import com.dev.vacfy.monitoring.domain.services.ContainerAccessService;
 import com.dev.vacfy.monitoring.domain.services.LotCommandService;
 import com.dev.vacfy.monitoring.domain.services.LotQueryService;
 import com.dev.vacfy.monitoring.interfaces.rest.resources.*;
@@ -28,10 +30,17 @@ import java.util.List;
 public class LotsController {
     private final LotCommandService lotCommandService;
     private final LotQueryService lotQueryService;
+    private final ContainerAccessService containerAccessService;
 
-    public LotsController(LotCommandService lotCommandService, LotQueryService lotQueryService) {
+    public LotsController(LotCommandService lotCommandService, LotQueryService lotQueryService,
+                          ContainerAccessService containerAccessService) {
         this.lotCommandService = lotCommandService;
         this.lotQueryService = lotQueryService;
+        this.containerAccessService = containerAccessService;
+    }
+
+    private AccessScope scope(HttpServletRequest request) {
+        return containerAccessService.scope(RequestViewer.from(request));
     }
 
     @PostMapping(value = "/lots/read", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -100,11 +109,14 @@ public class LotsController {
             @ApiResponse(responseCode = "201", description = "Lote registrado"),
             @ApiResponse(responseCode = "400", description = "Faltan datos, fecha inválida o vencida, GTIN inválido",
                     content = @Content(schema = @Schema(implementation = ApiErrorResource.class))),
+            @ApiResponse(responseCode = "403", description = "El termo no está asignado a esta enfermera",
+                    content = @Content(schema = @Schema(implementation = ApiErrorResource.class))),
             @ApiResponse(responseCode = "409", description = "Rango incompatible con el termo, lote repetido o GTIN de otra vacuna",
                     content = @Content(schema = @Schema(implementation = ApiErrorResource.class)))
     })
     public ResponseEntity<LotResource> registerLot(@org.springframework.web.bind.annotation.RequestBody RegisterLotResource resource,
                                                    HttpServletRequest request) {
+        RequestViewer.requireAccess(scope(request), resource.contenedor());
         Object userId = request.getAttribute("userId");
         var lot = lotCommandService.handle(new RegisterLotCommand(resource.contenedor(), resource.vaccineId(),
                 resource.lotNumber(), resource.expiryDate(), resource.vials(), resource.doses(), resource.gtin(),
@@ -116,25 +128,36 @@ public class LotsController {
     @Operation(summary = "Lotes de un termo",
             description = "Lotes activos del termo, del que vence primero al último, con su vacuna, para qué sirve y `daysToExpiry`. "
                     + "Con `includeExpired=true` también devuelve los vencidos que siguen en el termo (para descartarlos).")
-    @ApiResponse(responseCode = "200", description = "Lotes del termo (lista vacía si no tiene)")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Lotes del termo (lista vacía si no tiene)"),
+            @ApiResponse(responseCode = "403", description = "El termo no está asignado a esta enfermera",
+                    content = @Content(schema = @Schema(implementation = ApiErrorResource.class)))
+    })
     public ResponseEntity<List<LotResource>> getContainerLots(
             @Parameter(description = "Código del termo", example = "001") @PathVariable String contenedor,
-            @Parameter(description = "Incluir los lotes vencidos (EXPIRED)") @RequestParam(defaultValue = "false") boolean includeExpired) {
+            @Parameter(description = "Incluir los lotes vencidos (EXPIRED)") @RequestParam(defaultValue = "false") boolean includeExpired,
+            HttpServletRequest request) {
+        RequestViewer.requireAccess(scope(request), contenedor);
         return ResponseEntity.ok(lotQueryService.getContainerLots(contenedor, includeExpired).stream()
                 .map(LotResourceAssembler::toResource).toList());
     }
 
     @GetMapping("/lots/expiring")
     @Operation(summary = "Lotes por vencer",
-            description = "Lotes activos de todos los termos que vencen en `days` días o menos, del más próximo al más lejano.")
+            description = "Lotes activos que vencen en `days` días o menos, del más próximo al más lejano: de todos los termos "
+                    + "para el supervisor, de sus termos para la enfermera.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Lotes por vencer"),
             @ApiResponse(responseCode = "400", description = "days fuera de 0–3650",
                     content = @Content(schema = @Schema(implementation = ApiErrorResource.class)))
     })
     public ResponseEntity<List<LotResource>> getExpiringLots(
-            @Parameter(description = "Ventana en días", example = "30") @RequestParam(defaultValue = "30") int days) {
-        return ResponseEntity.ok(lotQueryService.getExpiringLots(days).stream().map(LotResourceAssembler::toResource).toList());
+            @Parameter(description = "Ventana en días", example = "30") @RequestParam(defaultValue = "30") int days,
+            HttpServletRequest request) {
+        AccessScope scope = scope(request);
+        return ResponseEntity.ok(lotQueryService.getExpiringLots(days).stream()
+                .filter(view -> scope.canSee(view.lot().getContenedor()))
+                .map(LotResourceAssembler::toResource).toList());
     }
 
     @PatchMapping(value = "/lots/{lotId}/close", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -147,13 +170,18 @@ public class LotsController {
             @ApiResponse(responseCode = "200", description = "Lote cerrado"),
             @ApiResponse(responseCode = "400", description = "status distinto de USED o DISCARDED",
                     content = @Content(schema = @Schema(implementation = ApiErrorResource.class))),
+            @ApiResponse(responseCode = "403", description = "El termo no está asignado a esta enfermera",
+                    content = @Content(schema = @Schema(implementation = ApiErrorResource.class))),
             @ApiResponse(responseCode = "404", description = "El lote no existe",
                     content = @Content(schema = @Schema(implementation = ApiErrorResource.class))),
             @ApiResponse(responseCode = "409", description = "El lote ya estaba cerrado",
                     content = @Content(schema = @Schema(implementation = ApiErrorResource.class)))
     })
     public ResponseEntity<LotResource> closeLot(@Parameter(description = "Id del lote", example = "7") @PathVariable Long lotId,
-                                                @org.springframework.web.bind.annotation.RequestBody CloseLotResource resource) {
+                                                @org.springframework.web.bind.annotation.RequestBody CloseLotResource resource,
+                                                HttpServletRequest request) {
+        AccessScope scope = scope(request);
+        lotQueryService.getLot(lotId).ifPresent(lot -> RequestViewer.requireAccess(scope, lot.getContenedor()));
         var lot = lotCommandService.handle(new CloseLotCommand(lotId, resource.status(), resource.reason()));
         return ResponseEntity.ok(LotResourceAssembler.toResource(lot));
     }

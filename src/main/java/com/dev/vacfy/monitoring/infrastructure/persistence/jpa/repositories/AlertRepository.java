@@ -23,4 +23,6 @@ public interface AlertRepository extends JpaRepository<Alert, Long> {
     List<Alert> findTop200ByStatusInOrderByStartedAtDesc(Collection<AlertStatus> statuses);
 
     List<Alert> findTop200ByContenedorAndStatusInOrderByStartedAtDesc(String contenedor, Collection<AlertStatus> statuses);
+
+    List<Alert> findTop200ByContenedorInAndStatusInOrderByStartedAtDesc(Collection<String> contenedores, Collection<AlertStatus> statuses);
 }
