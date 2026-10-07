@@ -20,6 +20,9 @@ public class SchemaPatches {
             // Un mismo lote de la misma vacuna solo puede estar ACTIVE una vez por termo
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_vaccine_lots_active "
                     + "ON vaccine_lots (vaccine_id, lot_number, contenedor) WHERE status = 'ACTIVE'",
+            // Un termo tiene como máximo una asignación activa
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_container_assignments_active "
+                    + "ON container_assignments (contenedor) WHERE hasta IS NULL",
             // Hibernate creó un CHECK con los tipos de alerta de entonces; ddl-auto=update no lo amplía
             // y las alertas LOT_EXPIRING / LOT_EXPIRED fallarían al guardarse
             "ALTER TABLE alerts DROP CONSTRAINT IF EXISTS alerts_type_check"

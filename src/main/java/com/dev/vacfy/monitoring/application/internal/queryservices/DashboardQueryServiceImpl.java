@@ -1,6 +1,7 @@
 package com.dev.vacfy.monitoring.application.internal.queryservices;
 
 import com.dev.vacfy.monitoring.domain.model.aggregates.Alert;
+import com.dev.vacfy.monitoring.domain.model.aggregates.Container;
 import com.dev.vacfy.monitoring.domain.model.aggregates.ContainerProfile;
 import com.dev.vacfy.monitoring.domain.model.aggregates.VaccineLot;
 import com.dev.vacfy.monitoring.domain.model.aggregates.VaccineProfile;
@@ -30,6 +31,7 @@ public class DashboardQueryServiceImpl implements DashboardQueryService {
     private final VaccineLotRepository vaccineLotRepository;
     private final VaccineProfileRepository vaccineProfileRepository;
     private final ContainerProfileRepository containerProfileRepository;
+    private final ContainerRepository containerRepository;
     private final ZoneId zoneId;
     private final Duration offlineAfter;
 
@@ -40,6 +42,7 @@ public class DashboardQueryServiceImpl implements DashboardQueryService {
                                      VaccineLotRepository vaccineLotRepository,
                                      VaccineProfileRepository vaccineProfileRepository,
                                      ContainerProfileRepository containerProfileRepository,
+                                     ContainerRepository containerRepository,
                                      ZoneId vactyZoneId,
                                      @Value("${vacty.alerts.offline-after-seconds:120}") long offlineAfterSeconds) {
         this.liveTelemetryStore = liveTelemetryStore;
@@ -49,6 +52,7 @@ public class DashboardQueryServiceImpl implements DashboardQueryService {
         this.vaccineLotRepository = vaccineLotRepository;
         this.vaccineProfileRepository = vaccineProfileRepository;
         this.containerProfileRepository = containerProfileRepository;
+        this.containerRepository = containerRepository;
         this.zoneId = vactyZoneId;
         this.offlineAfter = Duration.ofSeconds(offlineAfterSeconds);
     }
@@ -56,21 +60,39 @@ public class DashboardQueryServiceImpl implements DashboardQueryService {
     @Override
     public List<ContainerSummary> getSummary() {
         Instant now = Instant.now();
-        LocalDate today = LocalDate.now(zoneId);
-
-        Map<String, List<VaccineLot>> lotsByContainer = vaccineLotRepository
-                .findByStatusInOrderByExpiryDateAsc(LotStatus.IN_CONTAINER).stream()
-                .collect(Collectors.groupingBy(VaccineLot::getContenedor));
-        Map<String, List<Alert>> alertsByContainer = alertRepository.findByStatusIn(AlertStatus.OPEN).stream()
-                .collect(Collectors.groupingBy(Alert::getContenedor));
-        Map<Long, VaccineProfile> vaccines = vaccineProfileRepository.findAll().stream()
-                .collect(Collectors.toMap(VaccineProfile::getId, Function.identity()));
+        Map<String, List<VaccineLot>> lotsByContainer = lotsByContainer();
+        Map<String, List<Alert>> alertsByContainer = openAlertsByContainer();
 
         SortedSet<String> containers = new TreeSet<>(liveTelemetryStore.containers());
+        containerRepository.findAll().stream().map(Container::getCodigo).forEach(containers::add);
         containerProfileRepository.findAll().stream().map(ContainerProfile::getContenedor).forEach(containers::add);
         containers.addAll(lotsByContainer.keySet());
         containers.addAll(alertsByContainer.keySet());
         containers.addAll(readingRepository.findContenedoresSince(now.minus(RECENT_READINGS)));
+        return summarize(containers, lotsByContainer, alertsByContainer, now);
+    }
+
+    @Override
+    public List<ContainerSummary> getSummary(Collection<String> containers) {
+        if (containers.isEmpty()) return List.of();
+        return summarize(new TreeSet<>(containers), lotsByContainer(), openAlertsByContainer(), Instant.now());
+    }
+
+    private Map<String, List<VaccineLot>> lotsByContainer() {
+        return vaccineLotRepository.findByStatusInOrderByExpiryDateAsc(LotStatus.IN_CONTAINER).stream()
+                .collect(Collectors.groupingBy(VaccineLot::getContenedor));
+    }
+
+    private Map<String, List<Alert>> openAlertsByContainer() {
+        return alertRepository.findByStatusIn(AlertStatus.OPEN).stream()
+                .collect(Collectors.groupingBy(Alert::getContenedor));
+    }
+
+    private List<ContainerSummary> summarize(SortedSet<String> containers, Map<String, List<VaccineLot>> lotsByContainer,
+                                             Map<String, List<Alert>> alertsByContainer, Instant now) {
+        LocalDate today = LocalDate.now(zoneId);
+        Map<Long, VaccineProfile> vaccines = vaccineProfileRepository.findAll().stream()
+                .collect(Collectors.toMap(VaccineProfile::getId, Function.identity()));
 
         List<ContainerSummary> summaries = new ArrayList<>();
         for (String contenedor : containers) {

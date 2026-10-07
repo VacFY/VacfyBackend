@@ -26,13 +26,13 @@ public final class DashboardResourceAssembler {
                 summary.openAlerts(), summary.highestSeverity() == null ? null : summary.highestSeverity().name());
     }
 
-    private static RangeResource toResource(TemperatureLimits limits) {
+    public static RangeResource toResource(TemperatureLimits limits) {
         boolean lots = limits.basedOnLots();
         return new RangeResource(limits.minTemp(), limits.maxTemp(), lots ? "LOTS" : "PROFILE",
                 lots ? null : limits.profileName(), limits.freezeSensitive(), limits.heatSensitive());
     }
 
-    private static NextExpiryResource toResource(LotView view) {
+    public static NextExpiryResource toResource(LotView view) {
         if (view == null) return null;
         var lot = view.lot();
         return new NextExpiryResource(lot.getId(), view.vaccine() == null ? null : view.vaccine().getName(),

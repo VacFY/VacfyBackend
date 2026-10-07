@@ -1,6 +1,7 @@
 package com.dev.vacfy.monitoring.interfaces.websocket;
 
 import com.dev.vacfy.monitoring.domain.model.queries.GetAlertsQuery;
+import com.dev.vacfy.monitoring.domain.model.valueobjects.Viewer;
 import com.dev.vacfy.monitoring.domain.services.MonitoringQueryService;
 import com.dev.vacfy.monitoring.interfaces.rest.transform.MonitoringResourceAssembler;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -55,6 +56,18 @@ public class AlertWebSocketHandler extends TextWebSocketHandler {
 
     public void sendToAll(String message) {
         sessions.forEach(session -> send(session, message));
+    }
+
+    /** A las sesiones de estos usuarios y a las de los supervisores. */
+    public void sendToUsers(Set<String> userIds, String message) {
+        sessions.forEach(session -> {
+            Viewer viewer = viewerOf(session);
+            if (viewer.supervisor() || userIds.contains(viewer.userId())) send(session, message);
+        });
+    }
+
+    static Viewer viewerOf(WebSocketSession session) {
+        return Viewer.of(session.getAttributes().get("userId"), session.getAttributes().get("userRole"));
     }
 
     private void send(WebSocketSession session, String message) {
