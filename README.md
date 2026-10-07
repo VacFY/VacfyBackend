@@ -302,7 +302,7 @@ Cada lote (respuesta de registrar, cerrar y las listas):
 {
   "id": 2,
   "contenedor": "001",
-  "vaccine": { "id": 3, "name": "Hepatitis B", "protectsAgainst": "Hepatitis B", "minTemp": 2.0, "maxTemp": 8.0, "freezeSensitive": true, "heatSensitive": false, "dosesPerVial": null, "notes": null, "verified": false },
+  "vaccine": { "id": 3, "name": "Hepatitis B", "protectsAgainst": "Hepatitis B", "minTemp": 2.0, "maxTemp": 8.0, "freezeSensitive": true, "heatSensitive": false, "dosesPerVial": null, "notes": null, "verified": false, "careProfile": "ANTI_FREEZE", "careProfileLabel": "Anticongelamiento", "careInstructions": ["Se daña al congelarse.", "Usar paquetes fríos acondicionados.", "Evitar el contacto directo con el hielo."] },
   "gtin": null,
   "lotNumber": "HB77",
   "expiryDate": "2026-10-12",
@@ -328,16 +328,55 @@ Cada lote (respuesta de registrar, cerrar y las listas):
 | Método | Ruta | Body | Respuesta |
 |---|---|---|---|
 | GET | `/api/v1/vaccines` | — | **200** catálogo ordenado por nombre |
-| POST | `/api/v1/vaccines` | `{ "name", "protectsAgainst", "minTemp", "maxTemp", "freezeSensitive", "heatSensitive", "dosesPerVial", "notes" }` | **201** · **400** · **409** nombre repetido |
+| POST | `/api/v1/vaccines` | `{ "name", "protectsAgainst", "minTemp", "maxTemp", "freezeSensitive", "heatSensitive", "dosesPerVial", "notes", "careProfile", "careInstructions" }` | **201** · **400** · **409** nombre repetido |
 | PUT | `/api/v1/vaccines/{id}` | los mismos campos y `verified` | **200** · **400** · **404** · **409** |
 
 ```json
-{ "id": 2, "name": "Pentavalente", "protectsAgainst": "Difteria, tos ferina, tétanos, hepatitis B y Haemophilus influenzae tipo b (Hib)", "minTemp": 2.0, "maxTemp": 8.0, "freezeSensitive": true, "heatSensitive": false, "dosesPerVial": null, "notes": null, "verified": false }
+{
+  "id": 2,
+  "name": "Pentavalente",
+  "protectsAgainst": "Difteria, tos ferina, tétanos, hepatitis B y Haemophilus influenzae tipo b (Hib)",
+  "minTemp": 2.0,
+  "maxTemp": 8.0,
+  "freezeSensitive": true,
+  "heatSensitive": false,
+  "dosesPerVial": null,
+  "notes": null,
+  "verified": false,
+  "careProfile": "ANTI_FREEZE",
+  "careProfileLabel": "Anticongelamiento",
+  "careInstructions": ["Se daña al congelarse.", "Usar paquetes fríos acondicionados.", "Evitar el contacto directo con el hielo."]
+}
 ```
 
-- Al arrancar se crean, si no existen, 10 vacunas a 2–8 °C con `verified: false`: Pentavalente, Hepatitis B, Neumococo, Polio inactivada (IPV), Influenza y VPH (sensibles a la congelación); SPR, Varicela, BCG y Rotavirus (sensibles al calor). **Hay que revisarlas con la ficha técnica del fabricante** y marcarlas con `PUT /api/v1/vaccines/{id}` `{"verified": true}`.
+| Campo | Significado |
+|---|---|
+| `freezeSensitive` / `heatSensitive` | Los usa el motor: definen cuándo una alerta de temperatura es `CRITICAL` |
+| `careProfile` | Criterio de cuidado: `ANTI_FREEZE`, `PROTECT_FROM_LIGHT_AND_HEAT` o `CHECK_MANUFACTURER`. `null` si no se definió |
+| `careProfileLabel` | Texto del criterio, listo para mostrar: "Anticongelamiento", "Proteger de luz y calor" o "Verificar fabricante" |
+| `careInstructions` | Cuidados en el termo, uno por elemento; lista vacía si no hay. Para mostrarlos como viñetas |
+| `verified` | `true` cuando alguien revisó los datos con la ficha técnica del fabricante |
+
+**Semilla.** Al arrancar se crean, si no existen, estas 10 vacunas, todas con `verified: false`:
+
+| Vacuna | Rango | Se daña al congelarse | Sensible al calor | `careProfile` |
+|---|---|---|---|---|
+| Pentavalente, Hepatitis B, Neumococo, Polio inactivada (IPV), Influenza inactivada, VPH | 2–8 °C | Sí | No | `ANTI_FREEZE` |
+| SPR, BCG | 2–8 °C | No | Sí | `PROTECT_FROM_LIGHT_AND_HEAT` |
+| Varicela, Rotavirus | 2–8 °C, según el producto | Depende del producto (se guarda como No) | Sí | `CHECK_MANUFACTURER` |
+
+Cuidados de cada grupo (`careInstructions`):
+
+- **Anticongelamiento:** Se daña al congelarse. Usar paquetes fríos acondicionados. Evitar el contacto directo con el hielo.
+- **Proteger de luz y calor:** No se daña al congelarse (revisar la nota del fabricante). Usar paquetes fríos acondicionados. Evitar el contacto directo con el hielo no es imprescindible para el vial. Proteger de la luz.
+- **Verificar fabricante:** Congelación: depende del producto. Rango de 2 a 8 °C según el producto: verificar con el fabricante. Usar paquetes fríos acondicionados. Contacto directo con el hielo: según el producto (en Rotavirus, según la formulación). Protección de la luz: según el producto.
+
+**Hay que revisarlas con la ficha técnica del fabricante** y marcarlas con `PUT /api/v1/vaccines/{id}` `{"verified": true}`.
+
+Si la base ya tiene las vacunas de una semilla anterior y nadie las verificó ni les puso cuidados, al arrancar se completan una sola vez: nombre ("Influenza" pasa a "Influenza inactivada"), para qué sirve, sensibilidad y cuidados. Se conservan su rango, dosis por frasco y notas; las que ya tienen cuidados o están verificadas no se tocan.
+
 - En `POST` solo `name` es obligatorio; el rango por defecto es 2–8 °C.
-- `PUT` cambia solo los campos que envíes. Si el nuevo rango deja a algún termo sin un rango común entre sus lotes, responde 409.
+- `PUT` cambia solo los campos que envíes; `careInstructions`, si se envía, reemplaza la lista completa. Si el nuevo rango deja a algún termo sin un rango común entre sus lotes, responde 409.
 - Es la misma tabla que `/api/v1/vaccine-profiles` (que sigue funcionando igual); `/vaccines` no muestra el perfil genérico `PAI estándar 2–8 °C`.
 
 ### Lecturas — `GET /api/v1/readings` (requiere sesión)

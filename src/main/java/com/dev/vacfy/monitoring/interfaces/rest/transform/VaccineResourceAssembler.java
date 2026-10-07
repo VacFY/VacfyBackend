@@ -10,6 +10,9 @@ public final class VaccineResourceAssembler {
         if (vaccine == null) return null;
         return new VaccineResource(vaccine.getId(), vaccine.getName(), vaccine.getProtectsAgainst(),
                 vaccine.getMinTemp(), vaccine.getMaxTemp(), vaccine.isFreezeSensitive(), vaccine.isHeatSensitive(),
-                vaccine.getDosesPerVial(), vaccine.getNotes(), vaccine.isVerified());
+                vaccine.getDosesPerVial(), vaccine.getNotes(), vaccine.isVerified(),
+                vaccine.getCareProfile() == null ? null : vaccine.getCareProfile().name(),
+                vaccine.getCareProfile() == null ? null : vaccine.getCareProfile().label(),
+                vaccine.getCareInstructionList());
     }
 }

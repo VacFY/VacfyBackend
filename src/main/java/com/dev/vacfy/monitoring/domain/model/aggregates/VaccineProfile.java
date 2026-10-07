@@ -1,8 +1,11 @@
 package com.dev.vacfy.monitoring.domain.model.aggregates;
 
+import com.dev.vacfy.monitoring.domain.model.valueobjects.CareProfile;
 import com.dev.vacfy.monitoring.domain.model.valueobjects.TemperatureLimits;
 import jakarta.persistence.*;
 import lombok.Getter;
+
+import java.util.List;
 
 /**
  * Vacuna del catálogo (tabla vaccine_profiles): para qué sirve y en qué rango se conserva.
@@ -49,6 +52,15 @@ public class VaccineProfile {
     /** false hasta que alguien revise los datos con la ficha técnica del fabricante. */
     private Boolean verified;
 
+    /** Criterio de cuidado principal. null en vacunas creadas antes de existir el campo. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "care_profile", length = 32)
+    private CareProfile careProfile;
+
+    /** Cuidados en el termo, uno por línea (p. ej. "Usar paquetes fríos acondicionados."). */
+    @Column(name = "care_instructions", length = 1000)
+    private String careInstructions;
+
     protected VaccineProfile() { }
 
     public VaccineProfile(String name, double minTemp, double maxTemp, boolean freezeSensitive) {
@@ -88,6 +100,25 @@ public class VaccineProfile {
         this.notes = blankToNull(notes);
     }
 
+    /** Reemplaza el criterio y los cuidados. Las líneas vacías se descartan. */
+    public void updateCare(CareProfile careProfile, List<String> instructions) {
+        List<String> lines = instructions == null ? List.of() : instructions.stream()
+                .filter(line -> line != null && !line.isBlank())
+                .map(String::trim)
+                .toList();
+        if (lines.stream().anyMatch(line -> line.contains("\n"))) {
+            throw new IllegalArgumentException("Cada cuidado debe ir en una línea");
+        }
+        String joined = String.join("\n", lines);
+        if (joined.length() > 1000) throw new IllegalArgumentException("Los cuidados admiten hasta 1000 caracteres en total");
+        this.careProfile = careProfile;
+        this.careInstructions = joined.isEmpty() ? null : joined;
+    }
+
+    public List<String> getCareInstructionList() {
+        return careInstructions == null ? List.of() : List.of(careInstructions.split("\n"));
+    }
+
     public boolean isFreezeSensitive() {
         return Boolean.TRUE.equals(freezeSensitive);
     }
@@ -101,7 +132,7 @@ public class VaccineProfile {
     }
 
     public TemperatureLimits toLimits() {
-        return new TemperatureLimits(name, minTemp, maxTemp, isFreezeSensitive(), isHeatSensitive(), java.util.List.of());
+        return new TemperatureLimits(name, minTemp, maxTemp, isFreezeSensitive(), isHeatSensitive(), List.of());
     }
 
     private static String blankToNull(String value) {

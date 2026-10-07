@@ -42,7 +42,8 @@ public class VaccinesController {
                     (cuando el GTIN no está registrado o se llena a mano).
 
                     Al arrancar, el backend crea 10 vacunas del esquema nacional (2–8 °C, `verified=false`) \
-                    si no existen. No incluye el perfil genérico "PAI estándar 2–8 °C", que sigue en `/vaccine-profiles`.""")
+                    si no existen, con su criterio de cuidado (`careProfile`) y sus cuidados en el termo \
+                    (`careInstructions`). No incluye el perfil genérico "PAI estándar 2–8 °C", que sigue en `/vaccine-profiles`.""")
     @ApiResponse(responseCode = "200", description = "Lista de vacunas")
     public ResponseEntity<List<VaccineResource>> getVaccines() {
         return ResponseEntity.ok(vaccineQueryService.getVaccines().stream().map(VaccineResourceAssembler::toResource).toList());
@@ -61,7 +62,7 @@ public class VaccinesController {
     public ResponseEntity<VaccineResource> createVaccine(@RequestBody CreateVaccineResource resource) {
         var vaccine = vaccineCommandService.handle(new CreateVaccineCommand(resource.name(), resource.protectsAgainst(),
                 resource.minTemp(), resource.maxTemp(), resource.freezeSensitive(), resource.heatSensitive(),
-                resource.dosesPerVial(), resource.notes()));
+                resource.dosesPerVial(), resource.notes(), resource.careProfile(), resource.careInstructions()));
         return ResponseEntity.status(HttpStatus.CREATED).body(VaccineResourceAssembler.toResource(vaccine));
     }
 
@@ -69,7 +70,8 @@ public class VaccinesController {
     @Operation(summary = "Corregir vacuna o marcarla como verificada",
             description = """
                     Actualiza solo los campos que envíes; los que falten (o vengan en null) se mantienen. \
-                    Para marcarla como revisada basta con `{"verified": true}`.
+                    Para marcarla como revisada basta con `{"verified": true}`. `careInstructions`, si se envía, \
+                    reemplaza la lista completa.
 
                     Si cambias el rango, el termo que tenga lotes de esta vacuna recalcula su rango al instante. \
                     Responde 409 si el nuevo rango deja a algún termo sin un rango común con sus otros lotes.""")
@@ -86,7 +88,8 @@ public class VaccinesController {
                                                          @RequestBody UpdateVaccineResource resource) {
         var vaccine = vaccineCommandService.handle(new UpdateVaccineCommand(vaccineId, resource.name(),
                 resource.protectsAgainst(), resource.minTemp(), resource.maxTemp(), resource.freezeSensitive(),
-                resource.heatSensitive(), resource.dosesPerVial(), resource.notes(), resource.verified()));
+                resource.heatSensitive(), resource.dosesPerVial(), resource.notes(), resource.verified(),
+                resource.careProfile(), resource.careInstructions()));
         return ResponseEntity.ok(VaccineResourceAssembler.toResource(vaccine));
     }
 }
