@@ -1,0 +1,15 @@
+package com.dev.vacfy.monitoring.interfaces.rest.resources;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+
+@Schema(description = "Corrección de una vacuna. Los campos que no envíes (o envíes en null) mantienen su valor actual")
+public record UpdateVaccineResource(
+        @Schema(example = "Pentavalente") String name,
+        @Schema(example = "Difteria, tos ferina, tétanos, hepatitis B y Haemophilus influenzae tipo b (Hib)") String protectsAgainst,
+        @Schema(example = "2.0") Double minTemp,
+        @Schema(example = "8.0") Double maxTemp,
+        @Schema(example = "true") Boolean freezeSensitive,
+        @Schema(example = "false") Boolean heatSensitive,
+        @Schema(example = "1") Integer dosesPerVial,
+        String notes,
+        @Schema(description = "Márcalo en true después de revisar la ficha técnica", example = "true") Boolean verified) { }
