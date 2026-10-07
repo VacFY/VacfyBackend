@@ -2,6 +2,7 @@ package com.dev.vacfy.monitoring.infrastructure.config;
 
 import com.dev.vacfy.monitoring.domain.model.valueobjects.AlertRuleSettings;
 import com.dev.vacfy.monitoring.domain.services.AlertRuleEngine;
+import com.dev.vacfy.monitoring.domain.services.LotExpiryRules;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -31,6 +32,12 @@ public class MonitoringConfiguration {
                 Duration.ofSeconds(offlineAfterSeconds),
                 physicalMin,
                 physicalMax));
+    }
+
+    @Bean
+    public LotExpiryRules lotExpiryRules(@Value("${vacty.alerts.expiring-days:30}") int expiringDays,
+                                         @Value("${vacty.alerts.expiring-critical-days:7}") int criticalDays) {
+        return new LotExpiryRules(expiringDays, criticalDays);
     }
 
     /** Zona horaria de la posta: define qué día es "hoy" para los vencimientos. */

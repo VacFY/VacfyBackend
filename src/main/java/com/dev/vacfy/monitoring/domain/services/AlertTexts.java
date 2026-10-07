@@ -57,6 +57,8 @@ public final class AlertTexts {
             case RAPID_CHANGE -> "Cambio brusco de temperatura en termo " + contenedor;
             case SENSOR_OFFLINE -> "Termo " + contenedor + " sin datos";
             case INVALID_READING -> "Sensor con fallas en termo " + contenedor;
+            case LOT_EXPIRING -> "Lote por vencer en termo " + contenedor;
+            case LOT_EXPIRED -> "Lote vencido en termo " + contenedor;
         };
     }
 }

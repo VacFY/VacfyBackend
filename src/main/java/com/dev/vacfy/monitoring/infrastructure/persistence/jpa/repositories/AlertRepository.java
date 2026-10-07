@@ -16,6 +16,10 @@ public interface AlertRepository extends JpaRepository<Alert, Long> {
 
     List<Alert> findByContenedorAndStatusIn(String contenedor, Collection<AlertStatus> statuses);
 
+    List<Alert> findByLotIdAndStatusIn(Long lotId, Collection<AlertStatus> statuses);
+
+    List<Alert> findByStatusIn(Collection<AlertStatus> statuses);
+
     List<Alert> findTop200ByStatusInOrderByStartedAtDesc(Collection<AlertStatus> statuses);
 
     List<Alert> findTop200ByContenedorAndStatusInOrderByStartedAtDesc(String contenedor, Collection<AlertStatus> statuses);

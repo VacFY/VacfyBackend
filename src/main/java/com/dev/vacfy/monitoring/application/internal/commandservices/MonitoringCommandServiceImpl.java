@@ -187,7 +187,7 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
             try {
                 // Tras un reinicio, recupera las alertas que siguen abiertas en la base de datos
                 state.restoreOpenAlerts(alertRepository.findByContenedorAndStatusIn(key, AlertStatus.OPEN)
-                        .stream().map(Alert::getType).toList());
+                        .stream().map(Alert::getType).filter(type -> !type.isLotRule()).toList());
             } catch (Exception e) {
                 LOGGER.warn("No se pudieron recuperar las alertas abiertas de {}", key, e);
             }
@@ -210,6 +210,7 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
 
     private void trackOpenAlerts(String contenedor, double temperature) {
         for (Alert alert : alertRepository.findByContenedorAndStatusIn(contenedor, AlertStatus.OPEN)) {
+            if (alert.getType().isLotRule()) continue; // las de vencimiento no registran temperatura
             Double min = alert.getMinValue();
             Double max = alert.getMaxValue();
             alert.track(temperature);

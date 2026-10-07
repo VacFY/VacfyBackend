@@ -44,17 +44,20 @@ public class LotCommandServiceImpl implements LotCommandService {
     private final VaccineProfileRepository vaccineProfileRepository;
     private final VaccineProductRepository vaccineProductRepository;
     private final ContainerLimitsService containerLimitsService;
+    private final LotExpiryService lotExpiryService;
     private final ZoneId zoneId;
 
     public LotCommandServiceImpl(VaccineLotRepository vaccineLotRepository,
                                  VaccineProfileRepository vaccineProfileRepository,
                                  VaccineProductRepository vaccineProductRepository,
                                  ContainerLimitsService containerLimitsService,
+                                 LotExpiryService lotExpiryService,
                                  ZoneId vactyZoneId) {
         this.vaccineLotRepository = vaccineLotRepository;
         this.vaccineProfileRepository = vaccineProfileRepository;
         this.vaccineProductRepository = vaccineProductRepository;
         this.containerLimitsService = containerLimitsService;
+        this.lotExpiryService = lotExpiryService;
         this.zoneId = vactyZoneId;
     }
 
@@ -105,6 +108,11 @@ public class LotCommandServiceImpl implements LotCommandService {
         learnProduct(gtin, vaccine);
         containerLimitsService.invalidate(contenedor);
         LOGGER.info("Lote {} de {} registrado en el termo {}", lotNumber, vaccine.getName(), contenedor);
+        try {
+            lotExpiryService.check(lot, vaccine.getName(), today); // si vence pronto, la alerta sale al momento
+        } catch (Exception e) {
+            LOGGER.error("No se pudo revisar el vencimiento del lote {}", lot.getId(), e);
+        }
         return new LotView(lot, vaccine, lot.daysToExpiry(today));
     }
 
@@ -123,6 +131,7 @@ public class LotCommandServiceImpl implements LotCommandService {
         lot.close(status, reason, Instant.now());
         VaccineLot saved = vaccineLotRepository.save(lot);
         containerLimitsService.invalidate(saved.getContenedor());
+        lotExpiryService.resolveForClosedLot(saved);
         VaccineProfile vaccine = vaccineProfileRepository.findById(saved.getVaccineId()).orElse(null);
         LOGGER.info("Lote {} del termo {} cerrado como {}", saved.getLotNumber(), saved.getContenedor(), status);
         return new LotView(saved, vaccine, saved.daysToExpiry(LocalDate.now(zoneId)));
