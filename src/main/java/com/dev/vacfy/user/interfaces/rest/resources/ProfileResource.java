@@ -1,4 +1,11 @@
 package com.dev.vacfy.user.interfaces.rest.resources;
 
-public record ProfileResource(String profileDni, String profileName, String profileLastName, String profileCompany) {
+import io.swagger.v3.oas.annotations.media.Schema;
+
+@Schema(description = "Perfil del usuario. En una cuenta nueva, nombre, apellido y empresa valen \"Undefined\"")
+public record ProfileResource(
+        @Schema(example = "12345678") String profileDni,
+        @Schema(example = "Ana") String profileName,
+        @Schema(example = "Quispe") String profileLastName,
+        @Schema(description = "Establecimiento de salud", example = "Posta Santa Rosa") String profileCompany) {
 }

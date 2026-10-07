@@ -39,6 +39,12 @@ spring:
         jdbc:
           time_zone: UTC
 
+springdoc:
+  swagger-ui:
+    display-request-duration: true
+    # Muestra las secciones contraídas: se lee primero la portada
+    doc-expansion: none
+
 documentation:
   application:
     description: "VacTy-Backend"
