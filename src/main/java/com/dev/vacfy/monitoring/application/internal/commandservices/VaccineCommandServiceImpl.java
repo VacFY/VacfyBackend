@@ -1,12 +1,18 @@
 package com.dev.vacfy.monitoring.application.internal.commandservices;
 
+import com.dev.vacfy.monitoring.application.internal.queryservices.ContainerLimitsService;
 import com.dev.vacfy.monitoring.domain.exceptions.ConflictException;
 import com.dev.vacfy.monitoring.domain.exceptions.InvalidDataException;
 import com.dev.vacfy.monitoring.domain.exceptions.ResourceNotFoundException;
+import com.dev.vacfy.monitoring.domain.model.aggregates.VaccineLot;
 import com.dev.vacfy.monitoring.domain.model.aggregates.VaccineProfile;
 import com.dev.vacfy.monitoring.domain.model.commands.CreateVaccineCommand;
 import com.dev.vacfy.monitoring.domain.model.commands.UpdateVaccineCommand;
+import com.dev.vacfy.monitoring.domain.model.valueobjects.LotLimits;
+import com.dev.vacfy.monitoring.domain.model.valueobjects.LotStatus;
+import com.dev.vacfy.monitoring.domain.services.ContainerLimitsCalculator;
 import com.dev.vacfy.monitoring.domain.services.VaccineCommandService;
+import com.dev.vacfy.monitoring.infrastructure.persistence.jpa.repositories.VaccineLotRepository;
 import com.dev.vacfy.monitoring.infrastructure.persistence.jpa.repositories.VaccineProfileRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +21,10 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 @Service
 public class VaccineCommandServiceImpl implements VaccineCommandService {
@@ -36,9 +46,15 @@ public class VaccineCommandServiceImpl implements VaccineCommandService {
             new Seed("Rotavirus", "Diarrea grave por rotavirus", false, true));
 
     private final VaccineProfileRepository vaccineProfileRepository;
+    private final VaccineLotRepository vaccineLotRepository;
+    private final ContainerLimitsService containerLimitsService;
 
-    public VaccineCommandServiceImpl(VaccineProfileRepository vaccineProfileRepository) {
+    public VaccineCommandServiceImpl(VaccineProfileRepository vaccineProfileRepository,
+                                     VaccineLotRepository vaccineLotRepository,
+                                     ContainerLimitsService containerLimitsService) {
         this.vaccineProfileRepository = vaccineProfileRepository;
+        this.vaccineLotRepository = vaccineLotRepository;
+        this.containerLimitsService = containerLimitsService;
     }
 
     /** Crea las vacunas de la semilla que todavía no existen (por nombre). */
@@ -103,7 +119,31 @@ public class VaccineCommandServiceImpl implements VaccineCommandService {
         } catch (IllegalArgumentException e) {
             throw new InvalidDataException(e.getMessage());
         }
-        return vaccineProfileRepository.save(vaccine);
+        checkActiveLots(vaccine);
+        VaccineProfile saved = vaccineProfileRepository.save(vaccine);
+        containerLimitsService.invalidateAll(); // el rango o la sensibilidad de algún termo pudo cambiar
+        return saved;
+    }
+
+    /** 409 si con el nuevo rango algún termo se queda sin un rango común entre sus lotes activos. */
+    private void checkActiveLots(VaccineProfile updated) {
+        Map<String, List<VaccineLot>> ownLotsByContainer = vaccineLotRepository
+                .findByVaccineIdAndStatus(updated.getId(), LotStatus.ACTIVE).stream()
+                .collect(Collectors.groupingBy(VaccineLot::getContenedor, TreeMap::new, Collectors.toList()));
+        ownLotsByContainer.forEach((contenedor, ownLots) -> {
+            Set<Long> ownIds = ownLots.stream().map(VaccineLot::getId).collect(Collectors.toSet());
+            List<LotLimits> others = containerLimitsService.activeLotLimits(contenedor).stream()
+                    .filter(lot -> !ownIds.contains(lot.lot().lotId()))
+                    .toList();
+            List<LotLimits> conflicts = ContainerLimitsCalculator.conflicts(
+                    ContainerLimitsService.toLotLimits(ownLots.getFirst(), updated), others);
+            if (!conflicts.isEmpty()) {
+                throw new ConflictException("No se puede cambiar el rango de " + updated.getName() + " a "
+                        + ContainerLimitsCalculator.range(updated.getMinTemp(), updated.getMaxTemp()) + ": en el termo "
+                        + contenedor + " no tendría un rango común con "
+                        + ContainerLimitsCalculator.describe(conflicts.getFirst()) + ".");
+            }
+        });
     }
 
     private static double orDefault(Double value, double fallback) {

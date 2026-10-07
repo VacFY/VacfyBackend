@@ -1,5 +1,6 @@
 package com.dev.vacfy.monitoring.application.internal.commandservices;
 
+import com.dev.vacfy.monitoring.application.internal.queryservices.ContainerLimitsService;
 import com.dev.vacfy.monitoring.domain.exceptions.ConflictException;
 import com.dev.vacfy.monitoring.domain.exceptions.InvalidDataException;
 import com.dev.vacfy.monitoring.domain.exceptions.ResourceNotFoundException;
@@ -8,9 +9,12 @@ import com.dev.vacfy.monitoring.domain.model.aggregates.VaccineProduct;
 import com.dev.vacfy.monitoring.domain.model.aggregates.VaccineProfile;
 import com.dev.vacfy.monitoring.domain.model.commands.CloseLotCommand;
 import com.dev.vacfy.monitoring.domain.model.commands.RegisterLotCommand;
+import com.dev.vacfy.monitoring.domain.model.valueobjects.LotLimits;
+import com.dev.vacfy.monitoring.domain.model.valueobjects.LotRef;
 import com.dev.vacfy.monitoring.domain.model.valueobjects.LotSource;
 import com.dev.vacfy.monitoring.domain.model.valueobjects.LotStatus;
 import com.dev.vacfy.monitoring.domain.model.valueobjects.LotView;
+import com.dev.vacfy.monitoring.domain.services.ContainerLimitsCalculator;
 import com.dev.vacfy.monitoring.domain.services.Gs1Parser;
 import com.dev.vacfy.monitoring.domain.services.LotCommandService;
 import com.dev.vacfy.monitoring.infrastructure.persistence.jpa.repositories.VaccineLotRepository;
@@ -26,6 +30,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.List;
 import java.util.Locale;
 
 @Service
@@ -38,15 +43,18 @@ public class LotCommandServiceImpl implements LotCommandService {
     private final VaccineLotRepository vaccineLotRepository;
     private final VaccineProfileRepository vaccineProfileRepository;
     private final VaccineProductRepository vaccineProductRepository;
+    private final ContainerLimitsService containerLimitsService;
     private final ZoneId zoneId;
 
     public LotCommandServiceImpl(VaccineLotRepository vaccineLotRepository,
                                  VaccineProfileRepository vaccineProfileRepository,
                                  VaccineProductRepository vaccineProductRepository,
+                                 ContainerLimitsService containerLimitsService,
                                  ZoneId vactyZoneId) {
         this.vaccineLotRepository = vaccineLotRepository;
         this.vaccineProfileRepository = vaccineProfileRepository;
         this.vaccineProductRepository = vaccineProductRepository;
+        this.containerLimitsService = containerLimitsService;
         this.zoneId = vactyZoneId;
     }
 
@@ -85,6 +93,7 @@ public class LotCommandServiceImpl implements LotCommandService {
         if (vaccineLotRepository.existsByVaccineIdAndLotNumberAndContenedorAndStatus(vaccine.getId(), lotNumber, contenedor, LotStatus.ACTIVE)) {
             throw duplicateLot(lotNumber, vaccine, contenedor);
         }
+        checkRangeCompatibility(contenedor, vaccine, lotNumber, expiryDate);
 
         VaccineLot lot;
         try {
@@ -94,6 +103,7 @@ public class LotCommandServiceImpl implements LotCommandService {
             throw duplicateLot(lotNumber, vaccine, contenedor); // otro registro simultáneo ganó
         }
         learnProduct(gtin, vaccine);
+        containerLimitsService.invalidate(contenedor);
         LOGGER.info("Lote {} de {} registrado en el termo {}", lotNumber, vaccine.getName(), contenedor);
         return new LotView(lot, vaccine, lot.daysToExpiry(today));
     }
@@ -112,12 +122,30 @@ public class LotCommandServiceImpl implements LotCommandService {
         }
         lot.close(status, reason, Instant.now());
         VaccineLot saved = vaccineLotRepository.save(lot);
+        containerLimitsService.invalidate(saved.getContenedor());
         VaccineProfile vaccine = vaccineProfileRepository.findById(saved.getVaccineId()).orElse(null);
         LOGGER.info("Lote {} del termo {} cerrado como {}", saved.getLotNumber(), saved.getContenedor(), status);
         return new LotView(saved, vaccine, saved.daysToExpiry(LocalDate.now(zoneId)));
     }
 
     // ---------------------------------------------------------------------------------------------
+
+    /** 409 si la vacuna no tiene un rango en común con alguno de los lotes activos del termo. */
+    private void checkRangeCompatibility(String contenedor, VaccineProfile vaccine, String lotNumber, LocalDate expiryDate) {
+        LotLimits candidate = new LotLimits(new LotRef(null, contenedor, vaccine.getName(), lotNumber, expiryDate),
+                vaccine.getMinTemp(), vaccine.getMaxTemp(), vaccine.isFreezeSensitive(), vaccine.isHeatSensitive());
+        List<LotLimits> conflicts = ContainerLimitsCalculator.conflicts(candidate, containerLimitsService.activeLotLimits(contenedor));
+        if (conflicts.isEmpty()) return;
+        throw new ConflictException("No se puede guardar " + vaccine.getName() + " en el termo " + contenedor + ": necesita "
+                + ContainerLimitsCalculator.range(vaccine.getMinTemp(), vaccine.getMaxTemp())
+                + " y no tiene un rango común con " + describe(conflicts) + ". Guárdela en otro termo.");
+    }
+
+    private static String describe(List<LotLimits> lots) {
+        List<String> parts = lots.stream().map(ContainerLimitsCalculator::describe).toList();
+        if (parts.size() == 1) return parts.getFirst();
+        return String.join(", ", parts.subList(0, parts.size() - 1)) + " y " + parts.getLast();
+    }
 
     /** Si el GTIN es nuevo, lo asocia a la vacuna elegida para reconocerlo la próxima vez. */
     private void learnProduct(String gtin, VaccineProfile vaccine) {

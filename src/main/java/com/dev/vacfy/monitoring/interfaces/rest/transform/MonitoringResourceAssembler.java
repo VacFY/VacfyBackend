@@ -4,12 +4,14 @@ import com.dev.vacfy.monitoring.domain.model.aggregates.Alert;
 import com.dev.vacfy.monitoring.domain.model.aggregates.ContainerProfile;
 import com.dev.vacfy.monitoring.domain.model.aggregates.Reading;
 import com.dev.vacfy.monitoring.domain.model.aggregates.VaccineProfile;
+import com.dev.vacfy.monitoring.domain.services.AlertTexts;
 import com.dev.vacfy.monitoring.interfaces.rest.resources.AlertResource;
 import com.dev.vacfy.monitoring.interfaces.rest.resources.ContainerProfileResource;
 import com.dev.vacfy.monitoring.interfaces.rest.resources.ReadingResource;
 import com.dev.vacfy.monitoring.interfaces.rest.resources.VaccineProfileResource;
 
 import java.time.Instant;
+import java.util.List;
 
 public final class MonitoringResourceAssembler {
     private MonitoringResourceAssembler() { }
@@ -29,7 +31,10 @@ public final class MonitoringResourceAssembler {
                 iso(alert.getAcknowledgedAt()),
                 alert.getAcknowledgedBy(),
                 iso(alert.getResolvedAt()),
-                alert.getResolutionMessage());
+                alert.getResolutionMessage(),
+                alert.getTitle() != null ? alert.getTitle() : AlertTexts.fallbackTitle(alert.getType(), alert.getContenedor()),
+                alert.getAffectedLots() == null ? List.of() : alert.getAffectedLots(),
+                alert.getLotId());
     }
 
     public static ReadingResource toResource(Reading reading) {

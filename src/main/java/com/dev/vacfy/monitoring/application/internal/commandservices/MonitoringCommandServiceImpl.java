@@ -1,6 +1,7 @@
 package com.dev.vacfy.monitoring.application.internal.commandservices;
 
 import com.dev.vacfy.monitoring.application.internal.outboundservices.AlertPublisher;
+import com.dev.vacfy.monitoring.application.internal.queryservices.ContainerLimitsService;
 import com.dev.vacfy.monitoring.domain.model.aggregates.Alert;
 import com.dev.vacfy.monitoring.domain.model.aggregates.ContainerProfile;
 import com.dev.vacfy.monitoring.domain.model.aggregates.Reading;
@@ -37,14 +38,11 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class MonitoringCommandServiceImpl implements MonitoringCommandService {
     private static final Logger LOGGER = LoggerFactory.getLogger(MonitoringCommandServiceImpl.class);
-    private static final Duration LIMITS_CACHE_TTL = Duration.ofSeconds(60);
 
-    /** Estado en memoria por contenedor (reglas + muestreo + caché del perfil). */
+    /** Estado en memoria por contenedor (reglas + muestreo). El rango lo da ContainerLimitsService. */
     private static final class MonitorEntry {
         final ContainerMonitorState state;
         Instant lastPersistedAt;
-        TemperatureLimits limits;
-        Instant limitsLoadedAt;
 
         MonitorEntry(ContainerMonitorState state) {
             this.state = state;
@@ -57,11 +55,11 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
     private final VaccineProfileRepository vaccineProfileRepository;
     private final ContainerProfileRepository containerProfileRepository;
     private final AlertPublisher alertPublisher;
+    private final ContainerLimitsService containerLimitsService;
     private final Clock clock = Clock.systemUTC();
     private final Map<String, MonitorEntry> entries = new ConcurrentHashMap<>();
 
     private final Duration persistEvery;
-    private final TemperatureLimits fallbackLimits;
 
     public MonitoringCommandServiceImpl(AlertRuleEngine engine,
                                         ReadingRepository readingRepository,
@@ -69,24 +67,23 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
                                         VaccineProfileRepository vaccineProfileRepository,
                                         ContainerProfileRepository containerProfileRepository,
                                         AlertPublisher alertPublisher,
-                                        @Value("${vacty.readings.persist-every-seconds:30}") long persistEverySeconds,
-                                        @Value("${vacty.alerts.default-profile-name}") String defaultProfileName,
-                                        @Value("${vacty.alerts.default-min-temp:2.0}") double defaultMin,
-                                        @Value("${vacty.alerts.default-max-temp:8.0}") double defaultMax) {
+                                        ContainerLimitsService containerLimitsService,
+                                        @Value("${vacty.readings.persist-every-seconds:30}") long persistEverySeconds) {
         this.engine = engine;
         this.readingRepository = readingRepository;
         this.alertRepository = alertRepository;
         this.vaccineProfileRepository = vaccineProfileRepository;
         this.containerProfileRepository = containerProfileRepository;
         this.alertPublisher = alertPublisher;
+        this.containerLimitsService = containerLimitsService;
         this.persistEvery = Duration.ofSeconds(Math.max(0, persistEverySeconds));
-        this.fallbackLimits = new TemperatureLimits(defaultProfileName, defaultMin, defaultMax, true);
     }
 
     /** Crea el perfil por defecto y empieza a vigilar los contenedores ya configurados. */
     @EventListener(ApplicationReadyEvent.class)
     public void initialize() {
         try {
+            TemperatureLimits fallbackLimits = containerLimitsService.fallbackLimits();
             if (!vaccineProfileRepository.existsByName(fallbackLimits.profileName())) {
                 vaccineProfileRepository.save(new VaccineProfile(fallbackLimits.profileName(),
                         fallbackLimits.minTemp(), fallbackLimits.maxTemp(), fallbackLimits.freezeSensitive()));
@@ -108,7 +105,7 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
         MonitorEntry entry = entry(contenedor);
 
         synchronized (entry) {
-            TemperatureLimits limits = limits(entry, contenedor, now);
+            TemperatureLimits limits = containerLimitsService.get(contenedor);
             List<AlertEvent> events = engine.evaluate(entry.state, command.temperatura(), command.humedad(), now, limits);
 
             boolean valid = isValid(command.temperatura(), command.humedad());
@@ -173,10 +170,10 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
                 })
                 .orElseGet(() -> new ContainerProfile(contenedor, command.profileId()));
         ContainerProfile saved = containerProfileRepository.save(containerProfile);
+        containerLimitsService.invalidate(contenedor); // recarga el rango en la próxima lectura
 
         MonitorEntry entry = entry(contenedor);
         synchronized (entry) {
-            entry.limitsLoadedAt = null; // fuerza recargar el rango en la próxima lectura
             entry.state.seedLastReadingAt(clock.instant());
         }
         return saved;
@@ -196,27 +193,6 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
             }
             return new MonitorEntry(state);
         });
-    }
-
-    private TemperatureLimits limits(MonitorEntry entry, String contenedor, Instant now) {
-        if (entry.limits != null && entry.limitsLoadedAt != null
-                && entry.limitsLoadedAt.plus(LIMITS_CACHE_TTL).isAfter(now)) {
-            return entry.limits;
-        }
-        TemperatureLimits limits;
-        try {
-            limits = containerProfileRepository.findById(contenedor)
-                    .flatMap(cp -> vaccineProfileRepository.findById(cp.getProfileId()))
-                    .or(() -> vaccineProfileRepository.findByName(fallbackLimits.profileName()))
-                    .map(VaccineProfile::toLimits)
-                    .orElse(fallbackLimits);
-        } catch (Exception e) {
-            LOGGER.warn("No se pudo leer el perfil de {}; se usa {}", contenedor, fallbackLimits.profileName(), e);
-            limits = entry.limits != null ? entry.limits : fallbackLimits;
-        }
-        entry.limits = limits;
-        entry.limitsLoadedAt = now;
-        return limits;
     }
 
     private boolean shouldPersist(MonitorEntry entry, Instant now, List<AlertEvent> events) {
@@ -250,10 +226,10 @@ public class MonitoringCommandServiceImpl implements MonitoringCommandService {
         if (event.isOpen()) {
             if (open.isPresent()) return; // ya existe (p. ej. tras reiniciar el backend)
             Alert alert = alertRepository.save(new Alert(contenedor, event.type(), event.severity(),
-                    event.value(), event.message(), now));
+                    event.value(), event.title(), event.message(), event.affectedLots(), null, now));
             LOGGER.warn("ALERTA {} [{}] contenedor {}: {}", alert.getType(), alert.getSeverity(), contenedor, alert.getMessage());
             alertPublisher.publish(alert);
-        } else {
+        } else if (event.action() == AlertEvent.Action.RESOLVE) {
             open.ifPresent(alert -> {
                 alert.resolve(event.message(), now);
                 Alert saved = alertRepository.save(alert);
