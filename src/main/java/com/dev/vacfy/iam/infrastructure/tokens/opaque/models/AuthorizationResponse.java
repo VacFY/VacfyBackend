@@ -1,4 +1,5 @@
 package com.dev.vacfy.iam.infrastructure.tokens.opaque.models;
 
-public record AuthorizationResponse(String userId) {
+/** @param role ENFERMERA o SUPERVISOR */
+public record AuthorizationResponse(String userId, String role) {
 }

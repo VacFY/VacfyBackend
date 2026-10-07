@@ -2,6 +2,7 @@ package com.dev.vacfy.iam.infrastructure.tokens.opaque.services;
 
 import com.dev.vacfy.iam.domain.exceptions.SecretBytesException;
 import com.dev.vacfy.iam.domain.exceptions.TokenBytesException;
+import com.dev.vacfy.iam.domain.model.values.UserRole;
 import com.dev.vacfy.iam.infrastructure.persistence.jpa.repositories.TokenSessionRepository;
 import com.dev.vacfy.iam.infrastructure.tokens.opaque.OpaqueTokenService;
 import com.dev.vacfy.iam.infrastructure.tokens.opaque.models.AuthorizationResponse;
@@ -107,9 +108,10 @@ public class OpaqueTokenServiceImpl implements OpaqueTokenService {
 
     @Override
     public Optional<AuthorizationResponse> getUserDataFromToken(String token) {
-        return tokenSessionRepository.findById(hashToken(token))
-                .filter(session -> !session.isExpired())
-                .map(session -> new AuthorizationResponse(session.getUserId().toString()));
+        return tokenSessionRepository.findSessionUser(hashToken(token))
+                .filter(session -> Instant.now().isBefore(session.expiresAt()))
+                .map(session -> new AuthorizationResponse(session.userId().toString(),
+                        (session.role() == null ? UserRole.ENFERMERA : session.role()).name()));
     }
 
     //-------------------------------------------------------------------------------------------------------------------

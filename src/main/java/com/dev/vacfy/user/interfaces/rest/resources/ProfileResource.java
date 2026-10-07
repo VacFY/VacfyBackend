@@ -7,5 +7,7 @@ public record ProfileResource(
         @Schema(example = "12345678") String profileDni,
         @Schema(example = "Ana") String profileName,
         @Schema(example = "Quispe") String profileLastName,
-        @Schema(description = "Establecimiento de salud", example = "Posta Santa Rosa") String profileCompany) {
+        @Schema(description = "Establecimiento de salud", example = "Posta Santa Rosa") String profileCompany,
+        @Schema(description = "ENFERMERA ve solo sus termos; SUPERVISOR (microred) ve todos y administra los termos",
+                allowableValues = {"ENFERMERA", "SUPERVISOR"}, example = "ENFERMERA") String role) {
 }

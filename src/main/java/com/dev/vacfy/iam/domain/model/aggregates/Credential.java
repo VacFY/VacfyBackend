@@ -3,10 +3,8 @@ package com.dev.vacfy.iam.domain.model.aggregates;
 import com.dev.vacfy.iam.domain.model.values.UserDni;
 import com.dev.vacfy.iam.domain.model.values.UserId;
 import com.dev.vacfy.iam.domain.model.values.UserPassword;
-import jakarta.persistence.Embedded;
-import jakarta.persistence.EmbeddedId;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Table;
+import com.dev.vacfy.iam.domain.model.values.UserRole;
+import jakarta.persistence.*;
 import lombok.Getter;
 
 @Entity
@@ -22,12 +20,22 @@ public class Credential {
     @Embedded
     private UserPassword userPassword;
 
+    /** null en cuentas creadas antes de los roles: cuenta como ENFERMERA. SUPERVISOR se asigna en la base de datos. */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 16)
+    private UserRole role;
+
     public Credential() {}
 
     public Credential(String userDni, String userPassword) {
         this.userId = new UserId();
         this.userDni = new UserDni(userDni);
         this.userPassword = new UserPassword(userPassword);
+        this.role = UserRole.ENFERMERA;
+    }
+
+    public UserRole getRole() {
+        return role == null ? UserRole.ENFERMERA : role;
     }
 
     public Credential updatePassword(String userPassword) {

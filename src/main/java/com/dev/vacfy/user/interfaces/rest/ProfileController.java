@@ -35,7 +35,8 @@ public class ProfileController {
     @GetMapping
     @Operation(summary = "Ver mi perfil",
             description = "Sirve también para saber si hay sesión: 200 = hay sesión, 401 = no. "
-                    + "Un usuario recién registrado tiene \"Undefined\" en nombre, apellido y empresa: trátalo como vacío.")
+                    + "Un usuario recién registrado tiene \"Undefined\" en nombre, apellido y empresa: trátalo como vacío. "
+                    + "`role` dice qué pantallas mostrar: ENFERMERA (Mis termos) o SUPERVISOR (todos los termos y su administración).")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Perfil del usuario"),
             @ApiResponse(responseCode = "404", description = "No tiene perfil", content = @Content),
@@ -48,7 +49,8 @@ public class ProfileController {
         if (profile.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
-        var profileResource = ProfileResourceFromEntityAssembler.toResourceFromEntity(profile.get());
+        Object role = request.getAttribute("userRole");
+        var profileResource = ProfileResourceFromEntityAssembler.toResourceFromEntity(profile.get(), role == null ? "ENFERMERA" : role.toString());
         return ResponseEntity.ok(profileResource);
     }
 

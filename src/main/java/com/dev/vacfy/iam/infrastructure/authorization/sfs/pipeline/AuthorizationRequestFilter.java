@@ -53,6 +53,7 @@ public class AuthorizationRequestFilter extends OncePerRequestFilter {
 
             request.setAttribute("opaqueToken", sessionToken);
             request.setAttribute("userId", authorizationResponse.get().userId());
+            request.setAttribute("userRole", authorizationResponse.get().role());
 
             //----------------------------------------------------------------------------------
 
