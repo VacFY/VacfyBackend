@@ -4,6 +4,7 @@ import com.dev.vacfy.iot.interfaces.websocket.WebSocketPublisher;
 import com.dev.vacfy.iot.interfaces.websocket.resources.Telemetry;
 import com.dev.vacfy.monitoring.domain.model.commands.ProcessTelemetryCommand;
 import com.dev.vacfy.monitoring.domain.services.MonitoringCommandService;
+import com.dev.vacfy.monitoring.domain.services.PairingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PreDestroy;
 import org.eclipse.paho.mqttv5.client.*;
@@ -19,27 +20,38 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Recibe la telemetría del ESP32 por MQTT.
  * 1) La reenvía tal cual por /ws/device (igual que antes).
  * 2) La pasa al motor de alertas (módulo monitoring).
+ * 3) Si vacty.pairing.mqtt-enabled=true, atiende pedidos de código temporal en vacty/{contenedor}/pairing/request
+ *    y responde en vacty/{contenedor}/pairing/code (fase OLED/QR).
  */
 @Component
 public class MqttConsumer {
     private static final Logger LOGGER = LoggerFactory.getLogger(MqttConsumer.class);
     /** "nan" no es JSON válido; el firmware antiguo lo envía cuando falla el DHT22. */
     private static final Pattern NAN_TOKEN = Pattern.compile("(?i)(?<=[:\\[,\\s])-?nan(?=\\s*[,}\\]])");
+    static final String PAIRING_REQUEST_FILTER = "vacty/+/pairing/request";
+    private static final Pattern PAIRING_REQUEST = Pattern.compile("vacty/([^/+#]+)/pairing/request");
+
+    /** Lo que se publica en vacty/{contenedor}/pairing/code para que el ESP32 lo muestre como QR. */
+    record PairingCodeMessage(String contenedor, String codigo, String venceEn, String qr) { }
 
     private final WebSocketPublisher webSocketPublisher;
     private final MonitoringCommandService monitoringCommandService;
+    private final PairingService pairingService;
     private final ObjectMapper objectMapper;
+    private final boolean pairingEnabled;
 
     private final String brokerUrl;
     private final String username;
@@ -54,7 +66,9 @@ public class MqttConsumer {
 
     public MqttConsumer(WebSocketPublisher webSocketPublisher,
                         MonitoringCommandService monitoringCommandService,
+                        PairingService pairingService,
                         ObjectMapper objectMapper,
+                        @Value("${vacty.pairing.mqtt-enabled:false}") boolean pairingEnabled,
                         @Value("${vacty.mqtt.broker-url}") String brokerUrl,
                         @Value("${vacty.mqtt.username:}") String username,
                         @Value("${vacty.mqtt.password:}") String password,
@@ -63,7 +77,9 @@ public class MqttConsumer {
                         @Value("${vacty.mqtt.retry-seconds:10}") long retrySeconds) {
         this.webSocketPublisher = webSocketPublisher;
         this.monitoringCommandService = monitoringCommandService;
+        this.pairingService = pairingService;
         this.objectMapper = objectMapper;
+        this.pairingEnabled = pairingEnabled;
         this.brokerUrl = brokerUrl;
         this.username = username;
         this.password = password;
@@ -140,6 +156,29 @@ public class MqttConsumer {
         }
     }
 
+    /** "vacty/001/pairing/request" → "001". */
+    static Optional<String> containerFromPairingTopic(String topic) {
+        Matcher matcher = PAIRING_REQUEST.matcher(topic == null ? "" : topic);
+        return matcher.matches() ? Optional.of(matcher.group(1)) : Optional.empty();
+    }
+
+    private void handlePairingRequest(String contenedor) {
+        try {
+            pairingService.issueTemporaryCode(contenedor).ifPresent(code -> {
+                try {
+                    String json = objectMapper.writeValueAsString(new PairingCodeMessage(code.contenedor(), code.codigo(),
+                            code.venceEn().toString(), code.qr()));
+                    // retained=false: el código no debe quedar guardado en el broker
+                    client.publish("vacty/" + code.contenedor() + "/pairing/code", json.getBytes(StandardCharsets.UTF_8), 1, false);
+                } catch (Exception e) {
+                    LOGGER.error("No se pudo publicar el código temporal del termo {}", contenedor, e);
+                }
+            });
+        } catch (Exception e) {
+            LOGGER.error("Error atendiendo el pedido de código temporal del termo {}", contenedor, e);
+        }
+    }
+
     @PreDestroy
     public void stop() {
         connector.shutdownNow();
@@ -172,7 +211,11 @@ public class MqttConsumer {
             String payload = new String(message.getPayload(), StandardCharsets.UTF_8);
             LOGGER.debug("MQTT [{}] {}", topic, payload);
             // Fuera del hilo de Paho: el motor escribe en la base de datos
-            if (!processor.isShutdown()) {
+            if (processor.isShutdown()) return;
+            Optional<String> pairingContainer = pairingEnabled ? containerFromPairingTopic(topic) : Optional.empty();
+            if (pairingContainer.isPresent()) {
+                processor.execute(() -> handlePairingRequest(pairingContainer.get()));
+            } else {
                 processor.execute(() -> handlePayload(payload));
             }
         }
@@ -187,6 +230,10 @@ public class MqttConsumer {
             try {
                 client.subscribe(topic, 1);
                 LOGGER.info("Suscrito a {}", topic);
+                if (pairingEnabled) {
+                    client.subscribe(PAIRING_REQUEST_FILTER, 1);
+                    LOGGER.info("Emparejamiento por QR activo: suscrito a {}", PAIRING_REQUEST_FILTER);
+                }
             } catch (MqttException e) {
                 LOGGER.error("No se pudo suscribir a {}", topic, e);
             }

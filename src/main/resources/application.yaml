@@ -80,6 +80,16 @@ vacty:
     client-id-prefix: ${MQTT_CLIENT_ID_PREFIX:vacty-backend}
     retry-seconds: 10
 
+  linking:
+    # Intentos fallidos de vincular un termo (por usuario y por termo) antes de responder 429
+    max-failed-attempts: 5
+    window-minutes: 10
+
+  pairing:
+    # Fase OLED/QR: el ESP32 pide un código temporal por MQTT. Apagado hasta que el broker tenga usuario/ACL por dispositivo
+    mqtt-enabled: ${PAIRING_MQTT_ENABLED:false}
+    code-ttl-seconds: 300
+
   readings:
     # Guarda como máximo 1 lectura cada N segundos por contenedor (todas mientras haya alerta activa)
     persist-every-seconds: ${READINGS_PERSIST_EVERY_SECONDS:30}
