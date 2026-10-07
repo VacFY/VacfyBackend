@@ -24,20 +24,202 @@ Base de datos: PostgreSQL en **Supabase**. Broker: Mosquitto u otro broker MQTT.
 - Las lecturas se guardan **1 cada 30 s por contenedor**, y **todas** mientras hay una alerta abierta.
 - Los umbrales se configuran en `application.yaml`, bajo `vacty.alerts.*`.
 
-### API nueva (requiere sesión)
+## API para el front
 
-| Método | Ruta | Uso |
+- **Base:** `http://localhost:8080` en local; en producción, la URL del backend desplegado. Todas las rutas REST empiezan con `/api/v1`.
+- **Formato:** JSON. Fechas en ISO-8601 UTC (`2026-10-07T14:03:00Z`), temperatura en °C, humedad en %.
+- **Swagger:** `/swagger-ui.html` permite probar todo desde el navegador.
+
+### Sesión (cookie)
+
+El login **no devuelve un token en el cuerpo**. El backend responde con `Set-Cookie: access-token=…` (HttpOnly, dura 12 h) y el navegador la envía sola en cada petición. Para eso, todas las llamadas deben ir con credenciales:
+
+```js
+fetch(`${API}/api/v1/profile`, { credentials: 'include' });
+// axios
+const api = axios.create({ baseURL: API, withCredentials: true });
+```
+
+- El origen del front debe estar en `ALLOWED_ORIGINS`.
+- Si el front y el backend están en dominios distintos, la cookie solo viaja con HTTPS y `COOKIE_SAMESITE=None`. El perfil `prod` ya usa `None`.
+- **Rutas públicas:** `sign-up`, `sign-in`, `/actuator/health`, Swagger y los WebSockets. Todo lo demás responde **401** si no hay sesión válida (sin cookie, vencida o cerrada). Ante un 401, manda al usuario al login.
+- JavaScript no puede leer la cookie. Para saber si hay sesión, llama a `GET /api/v1/profile`: 200 = hay sesión, 401 = no hay.
+
+### Errores
+
+Todavía no hay un manejador global de errores, así que los códigos son estos:
+
+| Código | Cuándo |
+|---|---|
+| 400 | JSON mal formado, falta un parámetro obligatorio, o fallan las validaciones de alertas, lecturas o perfiles de vacuna (detalladas abajo) |
+| 401 | No hay sesión |
+| 404 | `GET /profile`, `GET /device` o `PATCH /alerts/{id}/acknowledge` cuando el recurso no existe |
+| 500 | **Cualquier otro error de negocio:** DNI o contraseña incorrectos, DNI ya registrado, campo vacío, dispositivo inexistente… |
+
+El cuerpo del error es el genérico de Spring y **no trae el motivo**:
+
+```json
+{ "timestamp": "2026-10-07T14:03:00.000+00:00", "status": 500, "error": "Internal Server Error", "path": "/api/v1/authentication/sign-in" }
+```
+
+Por eso conviene validar los campos en el front antes de enviarlos y elegir el mensaje según el endpoint y el código. Por ejemplo, un 500 en `sign-in` casi siempre significa "DNI o contraseña incorrectos".
+
+### Autenticación — `/api/v1/authentication`
+
+| Método | Ruta | Sesión | Body | Respuesta |
+|---|---|---|---|---|
+| POST | `/sign-up` | No | `{ "userDni", "userPassword" }` | **201** sin cuerpo; deja la cookie (queda logueado) |
+| POST | `/sign-in` | No | `{ "userDni", "userPassword" }` | **200** sin cuerpo; deja la cookie |
+| POST | `/sign-out` | Sí | — | **200**; cierra la sesión y borra la cookie |
+| POST | `/reset-password` | Sí | `{ "currentPassword", "newPassword" }` | **200** sin cuerpo |
+
+```json
+{ "userDni": "12345678", "userPassword": "miClave123" }
+```
+
+- `sign-up` también crea el perfil del usuario, con nombre, apellido y empresa en `"Undefined"`.
+- Responden **500**: DNI ya registrado o vacío (`sign-up`), DNI o contraseña incorrectos (`sign-in`) y `currentPassword` incorrecta (`reset-password`).
+- El backend **acepta contraseñas vacías**: valídalas en el front. Una contraseña de más de 72 bytes da 500.
+- `reset-password` en realidad es "cambiar contraseña": pide la actual y no cierra la sesión. No hay recuperación por correo.
+
+### Perfil — `/api/v1/profile` (requiere sesión)
+
+| Método | Ruta | Body | Respuesta |
+|---|---|---|---|
+| GET | `/api/v1/profile` | — | **200** perfil · **404** si no existe |
+| PUT | `/api/v1/profile` | `{ "profileName", "profileLastName", "profileCompany" }` | **200** sin cuerpo |
+| PATCH | `/api/v1/profile/dni` | `{ "profileDni" }` | **200** sin cuerpo |
+
+```json
+{ "profileDni": "12345678", "profileName": "Ana", "profileLastName": "Quispe", "profileCompany": "Posta Santa Rosa" }
+```
+
+- Un usuario recién registrado tiene `"Undefined"` en nombre, apellido y empresa. Trátalo como vacío y pídele completar el perfil.
+- `PUT` exige los tres campos, sin vacíos (si falta uno, 500). Para cambiar solo uno, envía los otros con su valor actual.
+- `PATCH /dni` también cambia el DNI con el que se inicia sesión. Si el DNI ya está en uso, responde 500.
+
+### Dispositivo — `/api/v1/device` (requiere sesión)
+
+| Método | Ruta | Body | Respuesta |
+|---|---|---|---|
+| GET | `/api/v1/device` | — | **200** dispositivo · **404** si no tiene |
+| POST | `/api/v1/device` | `{ "deviceName", "deviceConnectionAddress" }` | **200** sin cuerpo (no devuelve el id) |
+| PUT | `/api/v1/device` | `{ "deviceName", "deviceConnectionAddress" }` | **200** sin cuerpo |
+| DELETE | `/api/v1/device/{deviceId}` | — | **200** sin cuerpo |
+
+```json
+{ "deviceId": "8d0c6a1e-2b7f-4c1a-9f3e-5a6b7c8d9e0f", "deviceName": "Termo 1", "deviceConnectionAddress": "192.168.1.50" }
+```
+
+- **Un solo dispositivo por usuario.** Cada `POST` crea uno nuevo y, si el usuario llega a tener dos, `GET` y `PUT` responden 500. Usa `POST` solo cuando `GET` devuelva 404; para editar, usa `PUT`.
+- Después del `POST`, llama a `GET` para obtener el `deviceId`.
+- Los dos campos son obligatorios y no pueden estar vacíos (si no, 500). `deviceConnectionAddress` es texto libre: el backend no lo usa.
+- `DELETE` con un id que no es del usuario, o que no es un UUID, responde 500.
+- El dispositivo no está vinculado al código `contenedor` de la telemetría.
+
+### Alertas — `/api/v1/alerts` (requiere sesión)
+
+**`GET /api/v1/alerts?status=OPEN&contenedor=001`** devuelve hasta 200 alertas, de la más reciente a la más antigua.
+
+| Parámetro | Obligatorio | Valores |
 |---|---|---|
-| GET | `/api/v1/alerts?status=OPEN&contenedor=001` | Alertas. `status`: OPEN (por defecto), ACTIVE, ACKNOWLEDGED, RESOLVED, ALL |
-| PATCH | `/api/v1/alerts/{id}/acknowledge` | La enfermera marca la alerta como vista |
-| GET | `/api/v1/readings?contenedor=001&from=…&to=…` | Historial (ISO-8601 UTC; por defecto, últimas 24 h) |
-| GET / POST | `/api/v1/vaccine-profiles` | Perfiles: `{"name","minTemp","maxTemp","freezeSensitive"}` |
-| PUT | `/api/v1/containers/{contenedor}/profile` | Asigna un perfil a un contenedor: `{"profileId":1}` |
+| `status` | No | `OPEN` (por defecto: `ACTIVE` + `ACKNOWLEDGED`), `ACTIVE`, `ACKNOWLEDGED`, `RESOLVED` o `ALL`. Otro valor da 400 |
+| `contenedor` | No | Código del contenedor (p. ej. `001`). Sin él, trae todos |
 
-### WebSockets
+**`PATCH /api/v1/alerts/{id}/acknowledge`** (sin body) marca la alerta como vista y devuelve **200** con la alerta actualizada, o **404** si no existe. Solo cambia las alertas `ACTIVE`; si ya estaba vista o resuelta, la devuelve igual. El cambio también se envía por `/ws/alerts`.
 
-- `/ws/device`: telemetría en vivo. Es el mismo JSON de antes: `{"contenedor","temperatura","humedad","distancia"}`.
-- `/ws/alerts`: cada mensaje es una alerta (`id, contenedor, type, severity, status, message, triggerValue, minValue, maxValue, startedAt, …`). Al conectarse se reciben primero las alertas abiertas.
+Cada alerta tiene esta forma (los campos que no aplican vienen en `null`):
+
+```json
+{
+  "id": 42,
+  "contenedor": "001",
+  "type": "OUT_OF_RANGE",
+  "severity": "WARNING",
+  "status": "ACKNOWLEDGED",
+  "message": "Temperatura por encima del máximo: 9.1 °C (rango PAI estándar 2–8 °C: 2.0 – 8.0 °C).",
+  "triggerValue": 9.1,
+  "minValue": 8.7,
+  "maxValue": 10.2,
+  "startedAt": "2026-10-07T14:03:00Z",
+  "acknowledgedAt": "2026-10-07T14:05:12Z",
+  "acknowledgedBy": "3f1c2b4a-7d8e-4f60-9a1b-2c3d4e5f6a7b",
+  "resolvedAt": null,
+  "resolutionMessage": null
+}
+```
+
+| Campo | Significado |
+|---|---|
+| `type` | `OUT_OF_RANGE`, `RAPID_CHANGE`, `SENSOR_OFFLINE` o `INVALID_READING` (ver [Motor de alertas](#motor-de-alertas)) |
+| `severity` | `WARNING` o `CRITICAL` (riesgo de congelación) |
+| `status` | `ACTIVE` → `ACKNOWLEDGED` → `RESOLVED`. Puede pasar de `ACTIVE` a `RESOLVED` sin que nadie la vea |
+| `message` | Texto en español, listo para mostrar |
+| `triggerValue` | Temperatura que abrió la alerta. `null` en `SENSOR_OFFLINE` y a veces en `INVALID_READING` |
+| `minValue` / `maxValue` | Temperatura mínima y máxima registradas mientras la alerta estuvo abierta |
+| `acknowledgedBy` | Id (UUID) del usuario que la marcó como vista. El backend no guarda su nombre |
+| `resolutionMessage` | Texto de cierre, p. ej. `"Temperatura de vuelta en rango: 6.8 °C."` |
+
+### Lecturas — `GET /api/v1/readings` (requiere sesión)
+
+`GET /api/v1/readings?contenedor=001&from=2026-10-07T00:00:00Z&to=2026-10-07T12:00:00Z`
+
+| Parámetro | Obligatorio | Nota |
+|---|---|---|
+| `contenedor` | Sí | Si falta, 400 |
+| `from` / `to` | No | ISO-8601 UTC. Por defecto, las últimas 24 h hasta ahora. Una fecha inválida da 400 |
+
+```json
+[
+  { "id": 1520, "contenedor": "001", "temperatura": 5.4, "humedad": 61.0, "receivedAt": "2026-10-07T11:59:30Z" }
+]
+```
+
+- Vienen **de la más reciente a la más antigua**. Para graficar, invierte el arreglo.
+- `humedad` puede venir en `null`.
+- **Máximo 1000 lecturas por consulta.** Como se guarda una cada 30 s, 1000 lecturas cubren unas 8 h: con el rango por defecto de 24 h solo llegan las ~8 h más recientes. Para rangos largos, pide tramos de 8 h o menos.
+
+### Perfiles de vacuna (requiere sesión)
+
+| Método | Ruta | Body | Respuesta |
+|---|---|---|---|
+| GET | `/api/v1/vaccine-profiles` | — | **200** lista ordenada por nombre |
+| POST | `/api/v1/vaccine-profiles` | `{ "name", "minTemp", "maxTemp", "freezeSensitive" }` | **201** con el perfil creado |
+| PUT | `/api/v1/containers/{contenedor}/profile` | `{ "profileId" }` | **200** `{ "contenedor", "profileId" }` |
+
+```json
+{ "id": 1, "name": "PAI estándar 2–8 °C", "minTemp": 2.0, "maxTemp": 8.0, "freezeSensitive": true }
+```
+
+- El perfil `PAI estándar 2–8 °C` siempre existe (se crea al arrancar). Los contenedores sin perfil asignado usan ese.
+- `POST` responde **400** si falta el nombre o ya existe, si falta `minTemp` o `maxTemp`, o si `minTemp >= maxTemp`. `freezeSensitive` es opcional (por defecto, `false`).
+- `PUT /containers/{contenedor}/profile` responde **400** si el perfil no existe. Si el contenedor ya tenía un perfil, lo reemplaza.
+- No hay endpoints para editar o borrar perfiles, ni para consultar qué perfil tiene asignado un contenedor.
+
+### Tiempo real (WebSockets)
+
+| URL | Qué envía |
+|---|---|
+| `/ws/device` | Cada lectura que llega del ESP32, sin el muestreo de 30 s: `{ "contenedor": "001", "temperatura": 5.4, "humedad": 61.0 }`. `humedad` puede ser `null` |
+| `/ws/alerts` | Una alerta por mensaje, con la misma forma que en REST. Al conectarse llegan primero las alertas abiertas; después, cada alerta que se abre, se marca como vista o se resuelve |
+
+- Usa `ws://localhost:8080/ws/...` en local y `wss://<backend>/ws/...` en producción.
+- No piden sesión, pero el origen del front debe estar en `ALLOWED_ORIGINS`.
+- Solo el servidor envía mensajes; lo que mande el cliente se ignora.
+- En `/ws/alerts`, actualiza tu lista por `id`: una alerta con `status: "RESOLVED"` ya se cerró.
+- Si la conexión se cae, reconéctate. Al reconectar, `/ws/alerts` vuelve a enviar las alertas abiertas.
+
+```js
+const ws = new WebSocket(`${WS}/ws/alerts`);
+ws.onmessage = (e) => {
+  const alert = JSON.parse(e.data);
+  alertsById[alert.id] = alert;
+};
+```
+
+### Salud
+
+`GET /actuator/health` es público y responde con `"status": "UP"` cuando el backend está listo.
 
 ## Correr en local
 
