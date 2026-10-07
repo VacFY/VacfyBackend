@@ -34,6 +34,14 @@ public class OpenApiConfiguration {
 
             El candado marca los endpoints que piden sesión; sin sesión responden **401**.
 
+            ## Roles y termos
+            - **ENFERMERA** (por defecto al registrarse) ve solo los termos que tiene vinculados: lecturas (desde que lo \
+            tiene), dashboard, alertas y lotes. Un termo ajeno responde **403**.
+            - **SUPERVISOR** (microred) ve todos los termos, los registra y genera sus claves. El rol se asigna en la base de \
+            datos (ver README). `GET /api/v1/profile` devuelve `role`.
+            - Para vincular: el supervisor registra el termo (**POST /api/v1/containers**, devuelve la clave una sola vez) y la \
+            enfermera envía código + clave a **POST /api/v1/containers/link**. Sus termos: **GET /api/v1/my/containers**.
+
             ## Registrar un lote
             1. **POST /api/v1/lots/read** con el código escaneado o escrito: devuelve GTIN, lote, vencimiento, \
             la vacuna (si el GTIN ya es conocido) y avisos. No guarda nada.
@@ -45,7 +53,12 @@ public class OpenApiConfiguration {
             - Tipos: `OUT_OF_RANGE`, `RAPID_CHANGE`, `SENSOR_OFFLINE`, `INVALID_READING`, `LOT_EXPIRING`, `LOT_EXPIRED`.
             - Ciclo: `ACTIVE` → `ACKNOWLEDGED` (la enfermera la vio) → `RESOLVED` (la condición terminó).
             - Cada alerta trae `title` (corto, para notificación), `message` (para la enfermera) y `affectedLots`.
-            - Se consultan con **GET /api/v1/alerts** y llegan en vivo por el WebSocket `/ws/alerts`. \
+            - Se consultan con **GET /api/v1/alerts** y llegan en vivo por el WebSocket `/ws/alerts`, que también avisa \
+            `{"tipo":"ASIGNACION_CAMBIADA","contenedor":"001"}` al vincular o desvincular.
+
+            ## WebSockets (`/ws/device`, `/ws/alerts`)
+            Piden sesión: el handshake lleva la misma cookie `access-token` (el navegador la envía sola; en la app móvil, \
+            enviar el header `Cookie`). Sin sesión, el handshake se rechaza. Cada usuario recibe solo lo de sus termos. \
             Swagger no muestra WebSockets: ver el README.
 
             ## Errores
@@ -53,11 +66,13 @@ public class OpenApiConfiguration {
             |---|---|
             | 400 | Datos inválidos |
             | 401 | No hay sesión |
+            | 403 | El termo no es suyo, o la acción es solo del supervisor |
             | 404 | No existe |
             | 409 | Choca con lo que ya existe (p. ej. rango incompatible en el termo, lote repetido) |
+            | 429 | Demasiados intentos fallidos de vincular un termo |
             | 500 | Error de negocio todavía sin manejar en autenticación, perfil y dispositivo (p. ej. contraseña incorrecta) |
 
-            Vacunas, lotes y dashboard devuelven `message` con el motivo listo para mostrar. El resto devuelve el error \
+            Vacunas, lotes, termos y los 403 devuelven `message` con el motivo listo para mostrar. El resto devuelve el error \
             genérico de Spring, sin motivo.
 
             **Formatos:** fechas y horas en ISO-8601 UTC (`2026-10-07T14:03:00Z`), fechas de vencimiento `AAAA-MM-DD`, \
@@ -67,6 +82,7 @@ public class OpenApiConfiguration {
     private static final List<Tag> TAGS = List.of(
             new Tag().name("Authentication").description("Registro, inicio y cierre de sesión (cookie HttpOnly)"),
             new Tag().name("Dashboard").description("Pantalla de inicio de web y móvil"),
+            new Tag().name("Containers").description("Termos: registro con clave, vinculación a la enfermera que lo lleva y quién lo tuvo"),
             new Tag().name("Alerts").description("Alertas de temperatura y vencimiento generadas por el backend"),
             new Tag().name("Lots").description("Lotes de vacunas en cada termo: leer el código de la caja, registrar, consultar y cerrar"),
             new Tag().name("Vaccines").description("Catálogo de vacunas: para qué sirve cada una y en qué rango se conserva"),

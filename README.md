@@ -7,7 +7,7 @@ Spring Boot 4 (OpenJDK 25), monolito modular hexagonal.
 | `iam` | Registro e inicio de sesión. Token opaco en cookie, sesiones en la tabla `sessions` (Postgres) con expiración |
 | `user` | Perfiles y dispositivos |
 | `iot` | Recibe la telemetría por MQTT y la reenvía en vivo por `/ws/device` |
-| `monitoring` | **Vacunas, lotes y alertas**: catálogo de vacunas, lotes de cada termo (lectura de códigos GS1), lecturas, motor de alertas de temperatura y vencimiento, dashboard y `/ws/alerts` |
+| `monitoring` | **Termos, vacunas, lotes y alertas**: termos vinculados a cada enfermera (código + clave), catálogo de vacunas, lotes de cada termo (lectura de códigos GS1), lecturas, motor de alertas de temperatura y vencimiento, dashboard y `/ws/alerts` |
 
 Base de datos: PostgreSQL en **Supabase**. Broker: Mosquitto u otro broker MQTT.
 
@@ -57,12 +57,13 @@ const api = axios.create({ baseURL: API, withCredentials: true });
 
 - El origen del front debe estar en `ALLOWED_ORIGINS`.
 - Si el front y el backend están en dominios distintos, la cookie solo viaja con HTTPS y `COOKIE_SAMESITE=None`. El perfil `prod` ya usa `None`.
-- **Rutas públicas:** `sign-up`, `sign-in`, `/actuator/health`, Swagger y los WebSockets. Todo lo demás responde **401** si no hay sesión válida (sin cookie, vencida o cerrada). Ante un 401, manda al usuario al login.
+- **Rutas públicas:** `sign-up`, `sign-in`, `/actuator/health` y Swagger. Todo lo demás, incluidos los WebSockets, responde **401** si no hay sesión válida (sin cookie, vencida o cerrada). Ante un 401, manda al usuario al login.
+- **Cada usuario ve solo lo suyo:** la enfermera, los termos que tiene vinculados; el supervisor, todos (ver [Termos y vinculación](#termos-y-vinculación-requiere-sesión)).
 - JavaScript no puede leer la cookie. Para saber si hay sesión, llama a `GET /api/v1/profile`: 200 = hay sesión, 401 = no hay.
 
 ### Errores
 
-**Vacunas, lotes y dashboard** responden con el motivo listo para mostrar en `message`:
+**Vacunas, lotes, termos y todos los 403 y 429** responden con el motivo listo para mostrar en `message`:
 
 ```json
 { "timestamp": "2026-10-07T17:03:15.278997Z", "status": 409, "error": "Conflict", "message": "No se puede guardar Varicela (congelada) en el termo 001: necesita -50,0 a -15,0 °C y no tiene un rango común con Pentavalente (lote AB1234, 2,0 a 8,0 °C). Guárdela en otro termo.", "path": "/api/v1/lots" }
@@ -112,10 +113,11 @@ Por eso conviene validar los campos en el front antes de enviarlos y elegir el m
 | PATCH | `/api/v1/profile/dni` | `{ "profileDni" }` | **200** sin cuerpo |
 
 ```json
-{ "profileDni": "12345678", "profileName": "Ana", "profileLastName": "Quispe", "profileCompany": "Posta Santa Rosa" }
+{ "profileDni": "12345678", "profileName": "Ana", "profileLastName": "Quispe", "profileCompany": "Posta Santa Rosa", "role": "ENFERMERA" }
 ```
 
 - Un usuario recién registrado tiene `"Undefined"` en nombre, apellido y empresa. Trátalo como vacío y pídele completar el perfil.
+- `role` es `ENFERMERA` o `SUPERVISOR`: decide qué pantallas mostrar (ver [Termos y vinculación](#termos-y-vinculación-requiere-sesión)).
 - `PUT` exige los tres campos, sin vacíos (si falta uno, 500). Para cambiar solo uno, envía los otros con su valor actual.
 - `PATCH /dni` también cambia el DNI con el que se inicia sesión. Si el DNI ya está en uso, responde 500.
 
@@ -136,11 +138,87 @@ Por eso conviene validar los campos en el front antes de enviarlos y elegir el m
 - Después del `POST`, llama a `GET` para obtener el `deviceId`.
 - Los dos campos son obligatorios y no pueden estar vacíos (si no, 500). `deviceConnectionAddress` es texto libre: el backend no lo usa.
 - `DELETE` con un id que no es del usuario, o que no es un UUID, responde 500.
-- El dispositivo no está vinculado al código `contenedor` de la telemetría.
+- El dispositivo no está vinculado al código `contenedor` de la telemetría. Para ligar termos a enfermeras se usa [Termos y vinculación](#termos-y-vinculación-requiere-sesión).
+
+### Termos y vinculación (requiere sesión)
+
+Cada termo queda vinculado a la enfermera que lo lleva, con **código + clave**. La enfermera ve solo sus termos; el supervisor (microred) ve todos.
+
+**Roles.** `GET /api/v1/profile` devuelve `role`:
+
+| Rol | Qué ve y qué puede hacer |
+|---|---|
+| `ENFERMERA` | Por defecto al registrarse. Ve solo sus termos vinculados: lecturas (desde que lo tiene), dashboard, alertas, lotes y WebSockets. Un termo ajeno responde **403** |
+| `SUPERVISOR` | Ve todos los termos, los registra, genera sus claves y puede desvincular a cualquiera |
+
+Para el MVP, el rol de supervisor se asigna directo en la base de datos (en Supabase: **SQL Editor**). La columna `role` se crea sola la primera vez que arranca esta versión; después basta con:
+
+```sql
+UPDATE credentials SET role = 'SUPERVISOR' WHERE user_dni = '12345678';
+```
+
+El cambio vale desde la siguiente petición, sin volver a iniciar sesión. Las cuentas anteriores, con `role` vacío, cuentan como `ENFERMERA`.
+
+| Método | Ruta | Quién | Body | Respuesta |
+|---|---|---|---|---|
+| POST | `/api/v1/containers` | Supervisor | `{ "codigo", "nombre" }` | **201** con la clave en claro (única vez) · **400** · **403** · **409** ya existe |
+| POST | `/api/v1/containers/{codigo}/regenerate-key` | Supervisor | — | **200** con la clave nueva (la anterior deja de servir) · **404** |
+| GET | `/api/v1/containers` | Supervisor | — | **200** todos los termos con quién lo tiene y su estado |
+| POST | `/api/v1/containers/link` | Cualquiera | `{ "codigo", "clave" }` | **200** · **400** código o clave incorrectos · **429** |
+| POST | `/api/v1/containers/{codigo}/unlink` | Quien lo tiene, o el supervisor | — | **200** · **403** no es suyo · **409** no está asignado |
+| GET | `/api/v1/my/containers` | Cualquiera | — | **200** mis termos |
+| GET | `/api/v1/containers/{codigo}/assignments` | Supervisor, o quien lo tiene ahora | — | **200** historial · **403** |
+
+**Registrar (supervisor).** El código es el que envía el ESP32 (1 a 32 letras, números, `-` o `_`). La respuesta trae la **clave de vinculación** en formato `XXX-XXX`, sin caracteres que se confunden (0/O, 1/I/L). **Solo se muestra esta vez**: imprímala en la etiqueta del termo. En la base de datos queda solo su hash (BCrypt).
+
+```json
+{ "codigo": "001", "nombre": "Termo Posta Huambos", "clave": "K7P-29Q", "activo": true, "creadoEn": "2026-10-07T21:28:49.230738Z" }
+```
+
+**Vincular (enfermera).** `{ "codigo": "001", "clave": "K7P-29Q" }`. La clave se acepta en mayúsculas o minúsculas, con o sin guion y espacios.
+
+```json
+{ "contenedor": "001", "nombre": "Termo Posta Huambos", "asignadoDesde": "2026-10-07T21:29:05.731544Z", "nuevaAsignacion": true }
+```
+
+- **Cambio de turno:** si otra enfermera tenía el termo, su asignación se cierra con `TOMADO_POR_OTRA` y se abre la nueva. Un termo tiene como máximo una asignación activa; una enfermera puede tener varios termos.
+- Si ya era suyo, responde 200 con `nuevaAsignacion: false` y no duplica nada.
+- Si el código o la clave no coinciden, el mensaje es siempre "Código o clave incorrectos.", sin decir cuál de los dos falló.
+- Tras **5 intentos fallidos en 10 minutos**, por usuario o por termo, responde **429** hasta que pase la ventana.
+- También acepta un código temporal del QR (ver [Emparejamiento por QR](#emparejamiento-por-qr-fase-oled-apagado-por-defecto)).
+- Al vincular o desvincular, los afectados y los supervisores reciben `{"tipo":"ASIGNACION_CAMBIADA","contenedor":"001"}` por `/ws/alerts`.
+
+**Mis termos.** `GET /api/v1/my/containers` devuelve, por termo, lo mismo que el dashboard más `nombre` y `asignadoDesde`:
+
+```json
+[
+  {
+    "contenedor": "001", "nombre": "Termo Posta Huambos", "asignadoDesde": "2026-10-07T21:29:05.731544Z",
+    "status": "OK", "temperatura": 5.0, "humedad": 50.0, "lastReadingAt": "2026-10-07T21:29:03.104Z",
+    "range": { "minTemp": 2.0, "maxTemp": 8.0, "basedOn": "PROFILE", "profileName": "PAI estándar 2–8 °C", "freezeSensitive": true, "heatSensitive": false },
+    "activeLots": 0, "expiredLots": 0, "nextExpiry": null, "openAlerts": 0, "highestSeverity": null
+  }
+]
+```
+
+**Entregar.** `POST /api/v1/containers/{codigo}/unlink` cierra la asignación con `ENTREGADO`. Si lo hace el supervisor sobre el termo de otra persona, `DESVINCULADO_POR_SUPERVISOR`. Otra enfermera recibe 403.
+
+**Todos los termos (supervisor).** Igual que "Mis termos", con `registrado`, `activo` y `asignadoA` (`{ userId, dni, nombre, desde }` o `null`). Un termo que envía telemetría sin estar registrado aparece con `registrado: false`: sus lecturas y alertas se guardan igual, pero nadie puede vincularlo hasta registrarlo.
+
+**Historial.** `GET /api/v1/containers/{codigo}/assignments`, del más reciente al más antiguo:
+
+```json
+[
+  { "id": 2, "contenedor": "001", "userId": "336d355b-…", "persona": { "userId": "336d355b-…", "dni": "33333333", "nombre": "Beto Rojas" }, "desde": "2026-10-07T21:29:35.288Z", "hasta": null, "motivoCierre": null },
+  { "id": 1, "contenedor": "001", "userId": "31b96677-…", "persona": { "userId": "31b96677-…", "dni": "22222222", "nombre": "Ana Quispe" }, "desde": "2026-10-07T21:29:05.731Z", "hasta": "2026-10-07T21:29:35.288Z", "motivoCierre": "TOMADO_POR_OTRA" }
+]
+```
+
+**Qué filtra el acceso.** Con un termo que no es suyo, la enfermera recibe **403** ("No tiene acceso al termo 002: vincúlelo primero con su clave.") en lecturas, lotes del termo, registrar o cerrar lotes, alertas con `contenedor`, marcar una alerta como vista y asignar perfil al termo. El dashboard, la lista de alertas y los lotes por vencer le muestran solo sus termos. Sus lecturas empiezan en `asignadoDesde`; el supervisor ve todo el historial.
 
 ### Dashboard — `GET /api/v1/dashboard/summary` (requiere sesión)
 
-Pantalla de inicio de web y móvil: un elemento por termo conocido (con telemetría reciente, perfil asignado, lotes o alertas), ordenado por código.
+Pantalla de inicio de web y móvil, ordenada por código. El supervisor ve un elemento por termo conocido (registrado, o con telemetría reciente, perfil, lotes o alertas); la enfermera, solo los termos que tiene vinculados.
 
 ```json
 {
@@ -176,7 +254,7 @@ Para refrescarlo, vuelve a pedirlo cuando llegue un mensaje por `/ws/alerts`, o 
 
 ### Alertas — `/api/v1/alerts` (requiere sesión)
 
-**`GET /api/v1/alerts?status=OPEN&contenedor=001`** devuelve hasta 200 alertas, de la más reciente a la más antigua: las de temperatura y las de vencimiento.
+**`GET /api/v1/alerts?status=OPEN&contenedor=001`** devuelve hasta 200 alertas, de la más reciente a la más antigua: las de temperatura y las de vencimiento. La enfermera solo ve las de sus termos; si pide un `contenedor` ajeno, recibe 403.
 
 | Parámetro | Obligatorio | Valores |
 |---|---|---|
@@ -395,6 +473,7 @@ Si la base ya tiene las vacunas de una semilla anterior y nadie las verificó ni
 ```
 
 - Vienen **de la más reciente a la más antigua**. Para graficar, invierte el arreglo.
+- La enfermera solo ve las lecturas de sus termos, y **desde que se le asignó** (`asignadoDesde`); un termo ajeno da 403. El supervisor ve todo el historial.
 - `humedad` puede venir en `null`.
 - **Máximo 1000 lecturas por consulta.** Como se guarda una cada 30 s, 1000 lecturas cubren unas 8 h: con el rango por defecto de 24 h solo llegan las ~8 h más recientes. Para rangos largos, pide tramos de 8 h o menos.
 
@@ -422,20 +501,27 @@ Si la base ya tiene las vacunas de una semilla anterior y nadie las verificó ni
 | URL | Qué envía |
 |---|---|
 | `/ws/device` | Cada lectura que llega del ESP32, sin el muestreo de 30 s: `{ "contenedor": "001", "temperatura": 5.4, "humedad": 61.0 }`. `humedad` puede ser `null` |
-| `/ws/alerts` | Una alerta por mensaje, con la misma forma que en REST. Al conectarse llegan primero las alertas abiertas; después, cada alerta que se abre, se marca como vista o se resuelve |
+| `/ws/alerts` | Una alerta por mensaje, con la misma forma que en REST. Al conectarse llegan primero las alertas abiertas; después, cada alerta que se abre, se marca como vista o se resuelve. También el aviso `{"tipo":"ASIGNACION_CAMBIADA","contenedor":"001"}` |
 
-- Usa `ws://localhost:8080/ws/...` en local y `wss://<backend>/ws/...` en producción.
-- No piden sesión, pero el origen del front debe estar en `ALLOWED_ORIGINS`.
+- **Piden sesión.** El handshake lleva la misma cookie `access-token` que la API REST. En el navegador se envía sola (con el mismo origen o `COOKIE_SAMESITE=None`). En la app móvil, guarda la cookie que llega en `Set-Cookie` al iniciar sesión y envíala en el header `Cookie` del handshake. Sin sesión válida, el handshake se rechaza (401).
+- **Cada usuario recibe solo lo de sus termos:** la enfermera, los que tiene vinculados; el supervisor, todos. Si alguien toma tu termo, sus lecturas dejan de llegarte al momento.
+- Usa `ws://localhost:8080/ws/...` en local y `wss://<backend>/ws/...` en producción. El origen del front debe estar en `ALLOWED_ORIGINS`.
 - Solo el servidor envía mensajes; lo que mande el cliente se ignora.
-- En `/ws/alerts`, actualiza tu lista por `id`: una alerta con `status: "RESOLVED"` ya se cerró.
+- En `/ws/alerts`, un mensaje con `tipo` es un aviso; uno con `id` es una alerta. Actualiza tu lista por `id`: una alerta con `status: "RESOLVED"` ya se cerró.
 - Si la conexión se cae, reconéctate. Al reconectar, `/ws/alerts` vuelve a enviar las alertas abiertas.
 
 ```js
-const ws = new WebSocket(`${WS}/ws/alerts`);
+const ws = new WebSocket(`${WS}/ws/alerts`);   // el navegador envía la cookie solo
 ws.onmessage = (e) => {
-  const alert = JSON.parse(e.data);
-  alertsById[alert.id] = alert;
+  const msg = JSON.parse(e.data);
+  if (msg.tipo === 'ASIGNACION_CAMBIADA') return refreshMyContainers();   // GET /api/v1/my/containers
+  alertsById[msg.id] = msg;
 };
+```
+
+```js
+// App móvil (React Native): la cookie va en el header
+const ws = new WebSocket(`${WS}/ws/device`, null, { headers: { Cookie: `access-token=${token}` } });
 ```
 
 Secuencia real de `/ws/alerts` mientras se registraba un lote que vence en 5 días y el termo 001 bajaba a 1,2 °C (resumida a `id`, `type`, `severity`, `status` y `title`; cada mensaje trae el JSON completo de arriba):
@@ -475,6 +561,43 @@ Una alerta de lote vencido completa:
 ### Salud
 
 `GET /actuator/health` es público y responde con `"status": "UP"` cuando el backend está listo.
+
+## Emparejamiento por QR (fase OLED, apagado por defecto)
+
+Pensado para cuando el ESP32 tenga pantalla: el termo muestra un QR con un **código temporal** y la app lo escanea, sin escribir la clave. El backend ya está listo; el firmware no cambia hasta entonces.
+
+Se activa con `PAIRING_MQTT_ENABLED=true` (`vacty.pairing.mqtt-enabled`). Así funciona:
+
+1. El ESP32 publica en **`vacty/{contenedor}/pairing/request`** un mensaje vacío o `{}`.
+2. Si el termo está registrado y activo, el backend genera un código de 6 caracteres, válido **5 minutos** (`vacty.pairing.code-ttl-seconds`). Guarda solo su hash, y un código nuevo reemplaza al anterior. Lo publica en **`vacty/{contenedor}/pairing/code`** (QoS 1, sin `retained`):
+
+   ```json
+   {"contenedor":"001","codigo":"K75NGJ","venceEn":"2026-10-07T21:35:05.234186Z","qr":"vacty:001:K75NGJ"}
+   ```
+
+3. El ESP32 muestra `qr` como código QR. Formato: **`vacty:<codigo del termo>:<clave>`**.
+4. La app lee el QR, separa código y clave, y llama a `POST /api/v1/containers/link` con `{ "codigo": "001", "clave": "K75NGJ" }`. Ese endpoint acepta tanto la clave fija de la etiqueta como el código temporal. El temporal sirve **una sola vez**.
+
+> **Antes de activarlo en producción:** el broker debe tener usuario y ACL por dispositivo, de modo que solo el termo 001 pueda leer `vacty/001/pairing/code` y publicar en `vacty/001/pairing/request`. Si no, cualquiera conectado al broker podría leer los códigos y vincularse.
+
+## Probar la vinculación en Swagger, paso a paso
+
+En local, con `./mvnw spring-boot:run`, abre http://localhost:8080/swagger-ui.html. Si el navegador no guarda la cookie por usar http, arranca con `COOKIE_SECURE=false`.
+
+1. **Crea dos cuentas.** En *Authentication → POST /sign-up*, crea al supervisor (`{"userDni":"11111111","userPassword":"clave123"}`) y a la enfermera (`{"userDni":"22222222","userPassword":"clave123"}`).
+2. **Haz supervisor a la primera.** En Supabase (*SQL Editor*): `UPDATE credentials SET role = 'SUPERVISOR' WHERE user_dni = '11111111';`
+3. **Registra el termo 001.** Inicia sesión como supervisor (*POST /sign-in* con `11111111`). En *Containers → POST /api/v1/containers*, envía `{"codigo":"001","nombre":"Termo Posta Huambos"}` y **anota la clave** de la respuesta (p. ej. `K7P-29Q`).
+4. **Vincula como enfermera.** Cierra sesión (*POST /sign-out*) e inicia sesión con `22222222`. En *POST /api/v1/containers/link*, envía `{"codigo":"001","clave":"K7P-29Q"}`.
+5. **Mira "Mis termos".** *GET /api/v1/my/containers* muestra el 001. *GET /api/v1/dashboard/summary* muestra solo ese termo, y *GET /api/v1/readings?contenedor=002* responde 403.
+6. **Mira la temperatura en vivo por WebSocket.** Con la sesión de la enfermera abierta en Swagger, abre la consola del navegador (F12) en esa misma pestaña y escribe:
+
+   ```js
+   const ws = new WebSocket(location.origin.replace('http', 'ws') + '/ws/device');
+   ws.onmessage = (e) => console.log(JSON.parse(e.data));
+   ```
+
+   Cuando el ESP32 del termo 001 publique, verás `{contenedor: '001', temperatura: …, humedad: …}`. Sin el ESP32, simúlalo: `mosquitto_pub -t iot/telemetry -m '{"contenedor":"001","temperatura":5.2,"humedad":60}'`. Una lectura del 002 no aparece, porque no es suyo.
+7. **Cambio de turno (opcional).** Con otra enfermera, vincula el 001 con la misma clave: la primera recibe `{"tipo":"ASIGNACION_CAMBIADA","contenedor":"001"}` por `/ws/alerts` y deja de recibir sus lecturas. Como supervisor, *GET /api/v1/containers/001/assignments* muestra el historial con `TOMADO_POR_OTRA`.
 
 ## Ejemplos con curl
 
@@ -525,6 +648,13 @@ curl -b cookies.txt -X PATCH -H "$J" -d '{"status":"DISCARDED","reason":"Vencido
 
 # Marcar una vacuna como revisada con la ficha técnica
 curl -b cookies.txt -X PUT -H "$J" -d '{"verified":true}' $API/api/v1/vaccines/2
+
+# Termos: el supervisor registra (guarda la clave de la respuesta) y la enfermera se vincula
+curl -b sup.txt -H "$J" -d '{"codigo":"001","nombre":"Termo Posta Huambos"}' $API/api/v1/containers
+# → {"codigo":"001","nombre":"Termo Posta Huambos","clave":"K7P-29Q","activo":true,…}
+curl -b cookies.txt -H "$J" -d '{"codigo":"001","clave":"K7P-29Q"}' $API/api/v1/containers/link
+curl -b cookies.txt $API/api/v1/my/containers
+curl -b cookies.txt -X POST $API/api/v1/containers/001/unlink
 ```
 
 ## Notificaciones push (pendiente)
@@ -536,7 +666,7 @@ Hoy la única implementación es `NoOpNotificationSender`, que solo deja una lí
 1. **Credenciales.** Crear el proyecto en Firebase y una cuenta de servicio. Pasar su JSON al backend por una variable de entorno (p. ej. `FIREBASE_CREDENTIALS` en base64), nunca en el repo.
 2. **Implementación.** Agregar la dependencia `com.google.firebase:firebase-admin` y una clase `FcmNotificationSender implements NotificationSender` en `monitoring/infrastructure/notifications`. Activarla solo cuando exista la variable (`@ConditionalOnProperty`) y marcar `NoOpNotificationSender` con `@ConditionalOnMissingBean(NotificationSender.class)` para que no haya dos.
 3. **Tokens de los celulares.** Un endpoint, p. ej. `POST /api/v1/push-tokens`, que guarde el token FCM de cada usuario (tabla nueva), y borrarlo en `sign-out` o cuando FCM responda que el token ya no es válido.
-4. **Destinatarios.** Hoy el backend no relaciona usuarios con termos: o se avisa a todos los tokens, o se usa un *topic* por termo (`termo-001`) al que cada celular se suscribe.
+4. **Destinatarios.** Avisar a la enfermera que tiene el termo (asignación activa en `container_assignments`) y a los supervisores, con el mismo criterio que `ContainerAccessService` usa para `/ws/alerts`.
 5. **App móvil.** Pedir permiso de notificaciones, obtener el token con el SDK de Firebase y enviarlo al backend después del login. Al tocar la notificación, abrir la alerta con `alertId`. En Android, un canal de alta prioridad para `CRITICAL`; en iOS, cargar la clave APNs en Firebase.
 
 ## Correr en local
@@ -585,13 +715,14 @@ Para ver las alertas: `GET /api/v1/alerts?status=ALL`, o conecta un cliente WebS
 | `MQTT_USERNAME` / `MQTT_PASSWORD` | Credenciales del broker |
 | `MQTT_TOPIC` | `iot/telemetry` |
 | `VACTY_TIMEZONE` | Zona horaria de la posta, define qué día es "hoy" para los vencimientos; por defecto `America/Lima` |
+| `PAIRING_MQTT_ENABLED` | `true` activa el emparejamiento por QR vía MQTT; por defecto `false` (ver [Emparejamiento por QR](#emparejamiento-por-qr-fase-oled-apagado-por-defecto)) |
 | `PORT` | Lo pone la plataforma; por defecto 8080 |
 
 **Notas sobre Supabase:**
 - Usa el *Session pooler* (botón **Connect** del dashboard). La conexión directa `db.<ref>.supabase.co` solo funciona por IPv6, y la mayoría de servicios de despliegue no lo soportan.
 - Los proyectos gratuitos se pausan por inactividad. Ábrelo antes de una demo.
-- Las tablas se crean con `ddl-auto=update`: `readings`, `alerts`, `vaccine_profiles` (catálogo de vacunas), `container_profiles`, `vaccine_lots`, `vaccine_products` (GTIN → vacuna) y `sessions` (sesiones de login; las vencidas se borran cada hora).
-- Al arrancar, `SchemaPatches` aplica dos ajustes que JPA no puede declarar: el índice único de lotes activos por termo y quitar el `CHECK` antiguo de `alerts.type`, que impediría guardar las alertas de vencimiento. Ambos se pueden repetir sin problema.
+- Las tablas se crean con `ddl-auto=update`: `readings`, `alerts`, `vaccine_profiles` (catálogo de vacunas), `container_profiles`, `vaccine_lots`, `vaccine_products` (GTIN → vacuna), `containers` (termos registrados), `container_assignments` (quién tiene cada termo) y `sessions` (sesiones de login; las vencidas se borran cada hora). En `credentials` se agrega la columna `role`, vacía en las cuentas existentes (cuentan como `ENFERMERA`).
+- Al arrancar, `SchemaPatches` aplica tres ajustes que JPA no puede declarar: el índice único de lotes activos por termo, el índice único de una sola asignación activa por termo, y quitar el `CHECK` antiguo de `alerts.type`, que impediría guardar las alertas de vencimiento. Todos se pueden repetir sin problema.
 
 ## Desplegar
 
@@ -617,3 +748,8 @@ RUN_CONTEXT_TEST=true ./mvnw test         # además, el test de contexto (necesi
 | `ContainerLimitsCalculatorTest` | Rango combinado de los lotes, sensibilidad, lotes incompatibles |
 | `LotExpiryRulesTest` | Avisos a 30 y 7 días, escalado a `CRITICAL`, lote vencido, sin duplicados |
 | `AlertRuleEngineTest` | Reglas de temperatura, y mensajes y severidad con los lotes del termo |
+| `ContainerLinkTest` | Registrar (solo supervisor), vincular con clave correcta o incorrecta, límite de intentos, cambio de turno, no duplicar, desvincular ajeno (403), supervisor desvincula, código temporal de un solo uso que vence, clave regenerada |
+| `ContainerAccessServiceImplTest` | Supervisor ve todo, enfermera solo lo suyo, caché que se invalida al vincular |
+| `AccessFilteringTest` | Lecturas (403 y desde la asignación), dashboard y alertas filtrados por usuario |
+| `WebSocketFilteringTest` / `SessionHandshakeInterceptorTest` | `/ws/device` y `/ws/alerts` solo envían a quien puede ver el termo; handshake sin sesión rechazado |
+| `PairingServiceImplTest` / `PairingTopicTest` / `ContainerKeysTest` | Códigos temporales, tópicos MQTT y formato de las claves |
